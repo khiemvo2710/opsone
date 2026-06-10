@@ -12,6 +12,7 @@ greennode-agentbase-skills/
 # Node / frontend build
 node_modules/
 dist/
+**/dist/
 *.tsbuildinfo
 
 # Go binaries
