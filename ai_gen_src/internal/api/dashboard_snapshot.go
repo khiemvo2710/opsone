@@ -23,18 +23,6 @@ type overviewCaches struct {
 	providersByProd  map[string]tools.GetProvidersOutput
 	latestCycleID    uint64
 	historyByScope   map[string][]store.ScopeHistoryPoint
-	dismissedMaint        map[string]struct{}
-	routingRejectedScopes map[string]struct{}
-}
-
-func (c *overviewCaches) maintDismissed(product, sku string) bool {
-	_, ok := c.dismissedMaint[store.MaintenanceScopeKey(product, sku)]
-	return ok
-}
-
-func (c *overviewCaches) isRoutingRejected(product, sku string) bool {
-	_, ok := c.routingRejectedScopes[store.MaintenanceScopeKey(product, sku)]
-	return ok
 }
 
 type scopeSnapshot struct {
@@ -82,14 +70,6 @@ func (s *Server) newOverviewCaches(ctx context.Context) (overviewCaches, error) 
 			historyByScope = h
 		}
 	}
-	dismissedMaint, _ := s.DB.ListDismissedMaintenanceScopeKeys(ctx)
-	if dismissedMaint == nil {
-		dismissedMaint = map[string]struct{}{}
-	}
-	routingRejectedScopes, _ := s.DB.ListRecentRoutingRejectionScopeKeys(ctx, 2*time.Hour)
-	if routingRejectedScopes == nil {
-		routingRejectedScopes = map[string]struct{}{}
-	}
 	return overviewCaches{
 		settings:        settings,
 		thresholds:      thresholds,
@@ -98,9 +78,7 @@ func (s *Server) newOverviewCaches(ctx context.Context) (overviewCaches, error) 
 		routingByProd:   make(map[string]tools.GetRoutingOutput),
 		providersByProd: make(map[string]tools.GetProvidersOutput),
 		latestCycleID:   latestCycle,
-		historyByScope:  historyByScope,
-		dismissedMaint:  dismissedMaint,
-		routingRejectedScopes: routingRejectedScopes,
+		historyByScope: historyByScope,
 	}, nil
 }
 
@@ -271,6 +249,16 @@ func (s *Server) buildScopeSnapshot(
 			}
 		}
 		snap.ConsecutiveBreaches = maxConsec
+		if !shouldAct && snap.HasWorst {
+			pc := agent.ProductContext{
+				Scopes:              snap.ScopeContexts,
+				MaintainedProviders: maintainedProviderSet(maintainedProviders),
+			}
+			if agent.ShouldForceAutoMaintenance(pc, sku, providers, th) ||
+				agent.ShouldForceAutoMaintenanceAllProviders(pc, sku, providers, th) {
+				shouldAct = true
+			}
+		}
 		snap.ShouldAct = shouldAct
 		if snap.HasWorst {
 			if snap.Worst.Threshold != nil {

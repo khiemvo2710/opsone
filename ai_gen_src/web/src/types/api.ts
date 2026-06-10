@@ -44,6 +44,8 @@ export interface DashboardOverviewRow {
   sku_code: string;
   health_status: HealthStatus;
   routing_pct: Record<string, number>;
+  /** Tỷ lệ routing mặc định theo biz (baseline). */
+  baseline_pct?: Record<string, number>;
   live_metrics?: ScopeLiveMetrics;
   provider_metrics?: Record<string, ProviderLiveMetrics>;
   maintenance?: {
@@ -149,18 +151,6 @@ export interface MaintenanceWindow {
   ends_at: string;
   status: string;
   reason?: string;
-}
-
-export interface AgentChange {
-  id: number;
-  product_code: string;
-  scope: string;
-  sku_code: string;
-  trigger_type: string;
-  change_status: string;
-  routing_before?: Record<string, number>;
-  routing_after?: Record<string, number>;
-  created_at: string;
 }
 
 export interface ProductThreshold {

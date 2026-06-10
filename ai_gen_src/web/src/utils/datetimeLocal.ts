@@ -7,7 +7,7 @@ export function toDatetimeLocalValue(d: Date): string {
 }
 
 /** ISO/RFC3339 từ API → datetime-local value. */
-export function isoToDatetimeLocalValue(iso: string): string {
+export function isoToDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return '';

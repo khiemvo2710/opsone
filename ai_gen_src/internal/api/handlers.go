@@ -11,7 +11,6 @@ import (
 
 	"opsone/internal/mock"
 	"opsone/internal/output"
-	"opsone/internal/rollback"
 	"opsone/internal/store"
 	"opsone/internal/tools"
 )
@@ -255,54 +254,6 @@ func (s *Server) handleRoutingPlanReject(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, http.StatusOK, map[string]any{"plan_id": id, "status": "rejected"})
 }
 
-func (s *Server) handleAgentChangesList(w http.ResponseWriter, r *http.Request) {
-	product := r.URL.Query().Get("product")
-	status := r.URL.Query().Get("status")
-	rows, err := s.DB.ListAgentChanges(r.Context(), product, status, 50)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
-	}
-	items := make([]map[string]any, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, agentChangeJSON(row))
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
-}
-
-func (s *Server) handleAgentChangeGet(w http.ResponseWriter, r *http.Request, id uint64) {
-	rec, err := s.DB.GetAgentChangeByID(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "Không tìm thấy thay đổi")
-		return
-	}
-	writeJSON(w, http.StatusOK, rec)
-}
-
-func (s *Server) handleAgentChangeRollback(w http.ResponseWriter, r *http.Request, id uint64) {
-	if !requireAdmin(w, r, s.Config.DevAuthBypass) {
-		return
-	}
-	var body struct {
-		Reason string `json:"reason"`
-	}
-	_ = decodeJSON(r, &body)
-	resp, err := s.Rollback.Rollback(r.Context(), rollback.Request{
-		ChangeID:   id,
-		ExecutedBy: actorFromRequest(r, s.Config.DevAuthBypass),
-		Reason:     body.Reason,
-	})
-	if err != nil {
-		if _, ok := err.(*rollback.ConflictError); ok {
-			writeError(w, http.StatusConflict, "conflict", err.Error())
-			return
-		}
-		writeError(w, http.StatusBadRequest, "rollback_failed", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
 func (s *Server) handleMaintenanceList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.DB.ListMaintenanceWindows(r.Context(), r.URL.Query().Get("product"), r.URL.Query().Get("status"), 50)
 	if err != nil {
@@ -443,6 +394,9 @@ func (s *Server) handleScopeAutoPut(w http.ResponseWriter, r *http.Request, prod
 		return
 	}
 	saved, _ := s.DB.GetScopeAutoConfig(r.Context(), product, sku)
+	if store.ShouldAutoApplyScope(saved, time.Now()) {
+		_ = s.DB.CancelPendingRoutingPlansForScope(r.Context(), product, sku)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"product_code":  saved.ProductCode,
 		"sku_code":      saved.SKUCode,
@@ -607,7 +561,8 @@ func (s *Server) handleRecommendationReject(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if rec.ActionType == "maintenance" {
-		if err := s.DB.InsertRecommendation(ctx, nil, nil, rec.ProductCode, rec.SKUCode, "maintenance", "DISMISSED: admin reject"); err != nil {
+		by := actorFromRequest(r, s.Config.DevAuthBypass)
+		if err := s.dismissMaintenanceSuggestion(ctx, rec.ProductCode, rec.SKUCode, rec.Detail, by); err != nil {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}

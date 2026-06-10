@@ -1,4 +1,6 @@
 import type { DashboardOverviewRow, HealthStatus, ProductThreshold } from '../types/api';
+import { isSkuUnderActiveMaintenance } from './maintenanceDisplay';
+import { shouldShowManualApproval } from './scopeAuto';
 import { isAnyProviderBreached } from './scopeMetrics';
 
 const HEALTH_RANK: Record<string, number> = { green: 0, yellow: 1, red: 2 };
@@ -30,6 +32,7 @@ export function worstHealth(statuses: Iterable<HealthStatus>): HealthStatus {
 }
 
 export function rowPendingApprove(row: DashboardOverviewRow): boolean {
+  if (!shouldShowManualApproval(row)) return false;
   const plan = row.pending_plan;
   if (
     plan &&
@@ -45,6 +48,7 @@ export function effectiveRowHealth(
   row: DashboardOverviewRow,
   threshold?: ProductThreshold,
 ): HealthStatus {
+  if (isSkuUnderActiveMaintenance(row)) return 'green';
   if (rowPendingApprove(row)) return 'red';
   if (row.health_status) {
     return normalizeHealth(row.health_status);

@@ -297,9 +297,10 @@ CREATE TABLE agent_analysis_history (
   service_type    ENUM('card','topup_data','topup') NOT NULL,
   sku_code        VARCHAR(32)  NOT NULL DEFAULT '',
   provider_code   VARCHAR(32)  NOT NULL,
-  success_rate    DECIMAL(5,2) NOT NULL,
-  pending_rate    DECIMAL(5,2) NOT NULL,
-  fail_rate       DECIMAL(5,2) NOT NULL,
+  success_rate        DECIMAL(5,2) NOT NULL,
+  pending_rate        DECIMAL(5,2) NOT NULL,
+  fail_rate           DECIMAL(5,2) NOT NULL,
+  total_transactions  INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'GD trong cửa sổ — tính breach pending/fail txn',
   KEY idx_history_cycle (cycle_id),
   KEY idx_history_lookup (product_code, provider_code, sku_code, recorded_at),
   CONSTRAINT fk_history_cycle FOREIGN KEY (cycle_id) REFERENCES agent_analysis_cycles(id)

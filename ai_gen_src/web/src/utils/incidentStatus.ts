@@ -5,8 +5,8 @@ export const INCIDENT_STATUS_LABEL: Record<string, string> = {
 };
 
 export const INCIDENT_RESOLUTION_LABEL: Record<string, string> = {
-  admin_approve: 'Duyệt routing',
-  admin_reject: 'Từ chối routing',
+  admin_approve: 'Duyệt đề xuất',
+  admin_reject: 'Từ chối đề xuất',
   auto: 'Tự động',
 };
 

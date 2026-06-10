@@ -8,7 +8,6 @@ const NAV = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/incidents', label: 'Sự cố' },
   { to: '/maintenance', label: 'Bảo trì' },
-  { to: '/changes', label: 'Lịch sử' },
   { to: '/settings', label: 'Cấu hình' },
 ];
 

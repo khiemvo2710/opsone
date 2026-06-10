@@ -30,6 +30,19 @@ export function roundPctToInt100(
   return out;
 }
 
+/** Baseline biz → ô nhập % (tổng = 100). */
+export function baselineRoutingPct(
+  baseline: Record<string, number> | undefined,
+  providers: readonly string[] = DEFAULT_PROVIDERS,
+): Record<string, number> | null {
+  if (!baseline || Object.keys(baseline).length === 0) return null;
+  const raw: Record<string, number> = {};
+  for (const p of providers) {
+    raw[p] = baseline[p] ?? 0;
+  }
+  return roundPctToInt100(raw, providers);
+}
+
 export function initialRoutingPct(
   proposed: Record<string, number> | undefined,
   current: Record<string, number> | undefined,
@@ -105,7 +118,7 @@ export function routingPctMapsEqual(
   providers: readonly string[],
 ): boolean {
   for (const p of providers) {
-    if ((a[p] ?? 0) !== (b[p] ?? 0)) return false;
+    if (Math.round(a[p] ?? 0) !== Math.round(b[p] ?? 0)) return false;
   }
   return true;
 }

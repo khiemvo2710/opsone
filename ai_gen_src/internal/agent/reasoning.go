@@ -128,8 +128,18 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 	if skuAction == "maintenance" {
 		effectiveAction = "maintenance"
 	}
+	forceMaint := thRes.Breached && ShouldForceAutoMaintenance(*pc, worst.SKUCode, routing, prodTh)
+	forceAllMaint := thRes.Breached && ShouldForceAutoMaintenanceAllProviders(*pc, worst.SKUCode, routing, prodTh)
+	forceRouting := thRes.Breached && ShouldForceAutoRouting(*pc, worst.SKUCode, routing, prodTh)
 
-	if thRes.ShouldAct {
+	inReopenGrace := false
+	if applyCycle, ok, err := r.DB.GetRecoveryApplyCycle(ctx, pc.Product.ProductCode, worst.SKUCode); err == nil && ok {
+		if cycleID <= applyCycle {
+			inReopenGrace = true
+		}
+	}
+
+	if thRes.ShouldAct || forceMaint || forceAllMaint || forceRouting {
 		existingID, err := r.DB.FindOpenIncidentForScope(ctx, pc.Product.ProductCode, worst.SKUCode, nil)
 		if err != nil {
 			return err
@@ -166,6 +176,9 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 
 		switch effectiveAction {
 		case "routing":
+			if inReopenGrace {
+				break
+			}
 			hasMaint, err := r.DB.HasPendingMaintenanceRecommendation(ctx, pc.Product.ProductCode, worst.SKUCode)
 			if err != nil {
 				return err
@@ -175,25 +188,59 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 			}
 			plan := BuildRoutingPlan(*pc, *worst, output.RoutingPlanReason(pc.Product.ProductCode, worst.ProviderCode, allEvidence), prodTh)
 			scope := plan.Scope
+			scopeAuto, _ := r.DB.GetScopeAutoConfig(ctx, pc.Product.ProductCode, worst.SKUCode)
+			autoApply := store.ShouldAutoApplyScope(scopeAuto, time.Now())
 			hasPending, err := r.DB.HasPendingRoutingPlan(ctx, pc.Product.ProductCode, worst.SKUCode)
 			if err != nil {
 				return err
 			}
 			if hasPending {
-				if err := r.DB.UpdatePendingRoutingPlanForScope(ctx, cyclePtr, pc.Product.ProductCode, worst.SKUCode, plan); err != nil {
-					return err
+				if autoApply {
+					_ = r.DB.CancelPendingRoutingPlansForScope(ctx, pc.Product.ProductCode, worst.SKUCode)
+					if err := r.applyRoutingPlanAuto(ctx, cyclePtr, pc, worst, plan, &pc.LastIncidentID); err != nil {
+						return err
+					}
+					pc.HealthSummary = fmt.Sprintf("%s — Đã tự động áp dụng routing", pc.Product.ProductCode)
+					pc.HealthStatus = "yellow"
+					routing = currentRouting(*pc, *worst)
+					if ShouldForceAutoMaintenance(*pc, worst.SKUCode, routing, prodTh) {
+						detail := skuReason
+						if detail == "" {
+							detail = output.MaintenanceDetail(pc.Product.ProductCode, worst.ProviderCode, thRes.BreachReasons)
+						}
+						if err := r.applyMaintenanceAuto(ctx, pc, worst, detail); err != nil {
+							return err
+						}
+						pc.HealthSummary = fmt.Sprintf("%s — Đã tự động bảo trì %s", pc.Product.ProductCode, worst.ProviderCode)
+						pc.HealthStatus = "red"
+					}
+				} else {
+					if err := r.DB.UpdatePendingRoutingPlanForScope(ctx, cyclePtr, pc.Product.ProductCode, worst.SKUCode, plan); err != nil {
+						return err
+					}
+					pc.HealthSummary = fmt.Sprintf("%s — Kế hoạch routing chờ duyệt", pc.Product.ProductCode)
+					pc.HealthStatus = "yellow"
 				}
-				pc.HealthSummary = fmt.Sprintf("%s — Kế hoạch routing chờ duyệt", pc.Product.ProductCode)
-				pc.HealthStatus = "yellow"
 				break
 			}
-			scopeAuto, _ := r.DB.GetScopeAutoConfig(ctx, pc.Product.ProductCode, worst.SKUCode)
-			if store.ShouldAutoApplyScope(scopeAuto, time.Now()) {
+			if autoApply {
 				if err := r.applyRoutingPlanAuto(ctx, cyclePtr, pc, worst, plan, &pc.LastIncidentID); err != nil {
 					return err
 				}
 				pc.HealthSummary = fmt.Sprintf("%s — Đã tự động áp dụng routing", pc.Product.ProductCode)
 				pc.HealthStatus = "yellow"
+				routing = currentRouting(*pc, *worst)
+				if ShouldForceAutoMaintenance(*pc, worst.SKUCode, routing, prodTh) {
+					detail := skuReason
+					if detail == "" {
+						detail = output.MaintenanceDetail(pc.Product.ProductCode, worst.ProviderCode, thRes.BreachReasons)
+					}
+					if err := r.applyMaintenanceAuto(ctx, pc, worst, detail); err != nil {
+						return err
+					}
+					pc.HealthSummary = fmt.Sprintf("%s — Đã tự động bảo trì %s", pc.Product.ProductCode, worst.ProviderCode)
+					pc.HealthStatus = "red"
+				}
 				break
 			}
 			_, err = r.DB.InsertRoutingPlan(ctx, cyclePtr, pc.Product.ProductCode, scope, worst.SKUCode, plan, "pending_approve")
@@ -203,11 +250,23 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 			pc.HealthSummary = fmt.Sprintf("%s — Kế hoạch routing chờ duyệt", pc.Product.ProductCode)
 			pc.HealthStatus = "yellow"
 		case "maintenance":
+			if inReopenGrace && !forceMaint && !forceAllMaint {
+				break
+			}
 			detail := output.MaintenanceDetail(pc.Product.ProductCode, worst.ProviderCode, thRes.BreachReasons)
 			if strings.Contains(skuReason, "Tất cả provider") {
 				detail = skuReason
 			}
 			_ = r.DB.CancelPendingRoutingPlansForScope(ctx, pc.Product.ProductCode, worst.SKUCode)
+			scopeAuto, _ := r.DB.GetScopeAutoConfig(ctx, pc.Product.ProductCode, worst.SKUCode)
+			if store.ShouldAutoApplyScope(scopeAuto, time.Now()) {
+				if err := r.applyMaintenanceAuto(ctx, pc, worst, detail); err != nil {
+					return err
+				}
+				pc.HealthSummary = fmt.Sprintf("%s — Đã tự động bảo trì %s", pc.Product.ProductCode, worst.ProviderCode)
+				pc.HealthStatus = "red"
+				break
+			}
 			inc := pc.LastIncidentID
 			var incPtr *string
 			if inc != "" {
@@ -232,6 +291,51 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 		}
 		pc.HealthStatus = "yellow"
 		pc.HealthSummary = output.MonitorRecommendation(pc.Product.ProductCode)
+	}
+	return nil
+}
+
+func maintenanceTargetsFromRouting(detail, providerCode string, routing map[string]float64) []string {
+	if strings.Contains(detail, "Tất cả provider đang routing") {
+		var out []string
+		for p, pct := range routing {
+			if pct > 0 {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	if providerCode != "" {
+		return []string{providerCode}
+	}
+	return nil
+}
+
+func (r *Reasoner) applyMaintenanceAuto(ctx context.Context, pc *ProductContext, worst *ScopeContext, detail string) error {
+	routing := currentRouting(*pc, *worst)
+	targets := maintenanceTargetsFromRouting(detail, worst.ProviderCode, routing)
+	if len(targets) == 0 {
+		return nil
+	}
+	startsAt := time.Now()
+	endsAt := startsAt.Add(60 * time.Minute)
+	reg := tools.NewRegistry(r.DB)
+	reason := fmt.Sprintf("auto maintenance: %s", detail)
+	for i, provider := range targets {
+		_, err := reg.SetMaintenance(ctx, tools.SetMaintenanceInput{
+			Product:     pc.Product.ProductCode,
+			Provider:    provider,
+			SKU:         worst.SKUCode,
+			StartsAt:    startsAt,
+			EndsAt:      endsAt,
+			TriggerType: "auto",
+			Reason:      reason,
+			Status:      "active",
+			Seq:         i,
+		})
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

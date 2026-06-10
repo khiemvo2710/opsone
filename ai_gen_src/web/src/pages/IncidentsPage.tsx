@@ -5,7 +5,7 @@ export function IncidentsPage() {
     <div className="page incidents-page">
       <section className="page__hero">
         <h1>Sự cố gần đây</h1>
-        <p className="muted">Danh sách sự cố theo thời gian — bấm mã để xem chi tiết.</p>
+        <p className="muted">Danh sách sự cố theo thời gian.</p>
       </section>
 
       <section className="page__section">

@@ -82,14 +82,15 @@ func (r *Runner) RunOnce(ctx context.Context) (CycleContext, error) {
 				continue
 			}
 			historyRows = append(historyRows, store.AnalysisHistoryRow{
-				RecordedAt:   now,
-				ProductCode:  s.ProductCode,
-				ServiceType:  s.ServiceType,
-				SKUCode:      s.SKUCode,
-				ProviderCode: s.ProviderCode,
-				SuccessRate:  s.Metrics.SuccessRate,
-				PendingRate:  s.Metrics.PendingRate,
-				FailRate:     s.Metrics.FailRate,
+				RecordedAt:        now,
+				ProductCode:       s.ProductCode,
+				ServiceType:       s.ServiceType,
+				SKUCode:           s.SKUCode,
+				ProviderCode:      s.ProviderCode,
+				SuccessRate:       s.Metrics.SuccessRate,
+				PendingRate:       s.Metrics.PendingRate,
+				FailRate:          s.Metrics.FailRate,
+				TotalTransactions: s.Metrics.TotalTransactions,
 			})
 		}
 	}

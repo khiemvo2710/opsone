@@ -5,16 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
 // ScopeHistoryPoint is one prior metric sample for trend / consecutive breach.
 type ScopeHistoryPoint struct {
-	CycleID     uint64
-	RecordedAt  time.Time
-	SuccessRate float64
-	PendingRate float64
-	FailRate    float64
+	CycleID           uint64
+	RecordedAt        time.Time
+	SuccessRate       float64
+	PendingRate       float64
+	FailRate          float64
+	TotalTransactions uint
 }
 
 func scopeHistoryKey(product, sku, provider string) string {
@@ -27,7 +29,7 @@ func (db *DB) LoadAgentHistoryThroughCycle(ctx context.Context, throughCycleID u
 		maxPerScope = 5
 	}
 	const query = `
-		SELECT product_code, sku_code, provider_code, cycle_id, recorded_at, success_rate, pending_rate, fail_rate
+		SELECT product_code, sku_code, provider_code, cycle_id, recorded_at, success_rate, pending_rate, fail_rate, total_transactions
 		FROM agent_analysis_history
 		WHERE cycle_id <= ?
 		ORDER BY product_code, sku_code, provider_code, cycle_id DESC`
@@ -41,7 +43,7 @@ func (db *DB) LoadAgentHistoryThroughCycle(ctx context.Context, throughCycleID u
 	for rows.Next() {
 		var product, sku, provider string
 		var p ScopeHistoryPoint
-		if err := rows.Scan(&product, &sku, &provider, &p.CycleID, &p.RecordedAt, &p.SuccessRate, &p.PendingRate, &p.FailRate); err != nil {
+		if err := rows.Scan(&product, &sku, &provider, &p.CycleID, &p.RecordedAt, &p.SuccessRate, &p.PendingRate, &p.FailRate, &p.TotalTransactions); err != nil {
 			return nil, err
 		}
 		key := scopeHistoryKey(product, sku, provider)
@@ -78,7 +80,7 @@ func ScopeConsecutiveBreachFromHistory(
 			continue
 		}
 		if p.CycleID < latestCycle {
-			if ScopeBreachedFromRates(p.SuccessRate, p.PendingRate, p.FailRate, th) {
+			if ScopeBreachedFromHistoryPoint(p, th) {
 				prior++
 			} else {
 				break
@@ -95,7 +97,7 @@ func (db *DB) GetRecentScopeHistory(ctx context.Context, product, sku, provider 
 		limit = 5
 	}
 	const query = `
-		SELECT cycle_id, recorded_at, success_rate, pending_rate, fail_rate
+		SELECT cycle_id, recorded_at, success_rate, pending_rate, fail_rate, total_transactions
 		FROM agent_analysis_history
 		WHERE product_code = ? AND sku_code = ? AND provider_code = ?
 		  AND cycle_id < ?
@@ -109,7 +111,7 @@ func (db *DB) GetRecentScopeHistory(ctx context.Context, product, sku, provider 
 	var out []ScopeHistoryPoint
 	for rows.Next() {
 		var p ScopeHistoryPoint
-		if err := rows.Scan(&p.CycleID, &p.RecordedAt, &p.SuccessRate, &p.PendingRate, &p.FailRate); err != nil {
+		if err := rows.Scan(&p.CycleID, &p.RecordedAt, &p.SuccessRate, &p.PendingRate, &p.FailRate, &p.TotalTransactions); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -117,7 +119,17 @@ func (db *DB) GetRecentScopeHistory(ctx context.Context, product, sku, provider 
 	return out, rows.Err()
 }
 
-// ScopeBreachedFromRates checks rate-only thresholds (history lacks txn counts).
+// ScopeBreachedFromHistoryPoint checks all 5 dashboard metrics when total_transactions is stored.
+func ScopeBreachedFromHistoryPoint(p ScopeHistoryPoint, th ProductThreshold) bool {
+	if p.TotalTransactions > 0 {
+		pTxn := uint(math.Round(float64(p.TotalTransactions) * p.PendingRate / 100))
+		fTxn := uint(math.Round(float64(p.TotalTransactions) * p.FailRate / 100))
+		return ScopeBreachedFromSnapshot(p.SuccessRate, p.PendingRate, p.FailRate, pTxn, fTxn, th)
+	}
+	return ScopeBreachedFromRates(p.SuccessRate, p.PendingRate, p.FailRate, th)
+}
+
+// ScopeBreachedFromRates checks rate-only thresholds (legacy history without txn counts).
 func ScopeBreachedFromRates(success, pending, fail float64, th ProductThreshold) bool {
 	if success < th.SuccessRateMinPct {
 		return true
@@ -239,7 +251,7 @@ func (db *DB) CountConsecutiveBreaches(ctx context.Context, product, sku, provid
 	}
 	count := 0
 	for _, p := range points {
-		if ScopeBreachedFromRates(p.SuccessRate, p.PendingRate, p.FailRate, th) {
+		if ScopeBreachedFromHistoryPoint(p, th) {
 			count++
 		} else {
 			break

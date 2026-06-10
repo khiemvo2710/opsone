@@ -1,14 +1,17 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { cloneElement, useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import type { DashboardOverviewRow } from '../types/api';
 import { HealthBadge } from './HealthBadge';
 import { ProductThresholdEditor } from './ProductThresholdEditor';
+import { ServiceMaintenanceButton } from './ServiceMaintenanceButton';
+import SkuMaintenanceTimeLabel from './SkuMaintenanceTimeLabel';
 import { ScopeAutoEditor } from './ScopeAutoEditor';
 import { ProviderMetricCell } from './ProviderMetricCell';
 import { effectiveRowHealth } from '../utils/dashboardHealth';
-import { isProviderUnderMaintenance } from '../utils/maintenanceDisplay';
+import { isProviderUnderMaintenance, isSkuUnderActiveMaintenance } from '../utils/maintenanceDisplay';
 import type { ProductThreshold } from '../types/api';
 import {
   activeRoutingProviders,
+  baselineRoutingPct,
   initialRoutingPct,
   isRoutingProviderSupported,
   routingPctFieldInvalid,
@@ -16,12 +19,13 @@ import {
   routingPctValidationError,
   ROUTING_PCT_MAX,
 } from './RoutingPctEditor';
+import { shouldShowManualApproval } from '../utils/scopeAuto';
 import {
-  defaultMaintenanceWindow,
-  isSkuWideMaintenance,
   maintenanceSuggestLabel,
   maintenanceWindowError,
   maintenanceWindowISO,
+  defaultMaintenanceWindow,
+  isSkuWideMaintenance,
 } from '../utils/maintenanceWindow';
 import { DateTimeLocalField } from './DateTimeLocalField';
 import {
@@ -29,50 +33,27 @@ import {
   type ExtendMaintenancePayload,
   type ScopeMaintenanceActionPayload,
 } from './ActiveMaintenanceCell';
+import { groupRowsByProduct, type ProductGroup } from '../utils/dashboardRowOrder';
 
 const PROVIDERS = ['ESALE', 'IMEDIA', 'SHOPPAY'] as const;
 
 type PlanAction = 'approved' | 'rejected';
 
-interface ProductGroup {
-  productCode: string;
-  productLabel: string;
-  rows: DashboardOverviewRow[];
-}
-
-function compareSkuCode(a: string, b: string): number {
-  const aNum = /^\d+$/.test(a);
-  const bNum = /^\d+$/.test(b);
-  if (aNum && bNum) {
-    return Number(a) - Number(b);
-  }
-  return a.localeCompare(b, undefined, { numeric: true });
-}
-
-function groupRowsByProduct(rows: DashboardOverviewRow[]): ProductGroup[] {
-  const groups: ProductGroup[] = [];
-  const index = new Map<string, number>();
-  for (const row of rows) {
-    const existing = index.get(row.product_code);
-    if (existing === undefined) {
-      index.set(row.product_code, groups.length);
-      groups.push({
-        productCode: row.product_code,
-        productLabel: row.product_label || row.product_code,
-        rows: [row],
-      });
-    } else {
-      groups[existing].rows.push(row);
-    }
-  }
-  for (const group of groups) {
-    group.rows.sort((a, b) => compareSkuCode(a.sku_code, b.sku_code));
-  }
-  return groups;
-}
-
 function fmtSku(sku: string): string {
   return sku === '' ? '—' : sku;
+}
+
+/** Viền dưới khối SKU (dòng chính + hàng con plan/bảo trì) trước SKU kế tiếp. */
+function markScopeBlockEnd(rows: ReactElement[]): ReactElement[] {
+  if (rows.length === 0) return rows;
+  const last = rows[rows.length - 1];
+  const existing = last.props.className ?? '';
+  return [
+    ...rows.slice(0, -1),
+    cloneElement(last, {
+      className: [existing, 'overview-table__scope-block-end'].filter(Boolean).join(' '),
+    }),
+  ];
 }
 
 function planStatusLabel(status: string, localAction?: PlanAction): string {
@@ -104,10 +85,16 @@ function planBadgeClass(status: string, localAction?: PlanAction): string {
 function isRoutingRejected(
   scopeKey: string,
   plan: DashboardOverviewRow['pending_plan'],
-  scopeDone: Record<string, { planId: number; action: PlanAction }>,
+  scopeDone: Record<string, { planId: number; action: PlanAction; rejectedRouting?: Record<string, number> }>,
   planActions: Record<number, PlanAction>,
 ): boolean {
-  if (scopeDone[scopeKey]?.action === 'rejected') return true;
+  const done = scopeDone[scopeKey];
+  if (done?.action === 'rejected') {
+    if (!plan) return true;
+    const proposed = plan.plan?.proposed_pct;
+    if (!proposed || !done.rejectedRouting) return true;
+    return routingPctMapsEqual(done.rejectedRouting, proposed, PROVIDERS);
+  }
   const planId = plan?.id;
   return planId != null && planActions[planId] === 'rejected';
 }
@@ -123,13 +110,34 @@ function isMaintenanceRejected(
   return maintId != null && maintActions[maintId] === 'rejected';
 }
 
-/** Ẩn đề xuất bảo trì sau duyệt/từ chối hoặc khi cửa sổ bảo trì đã active. */
+function shouldShowPendingPlan(
+  row: DashboardOverviewRow,
+  scopeKey: string,
+  scopeDone: Record<string, { planId: number; action: PlanAction; rejectedRouting?: Record<string, number> }>,
+  planActions: Record<number, PlanAction>,
+): boolean {
+  if (!shouldShowManualApproval(row)) return false;
+  if (!row.pending_plan) return false;
+  return !isRoutingRejected(scopeKey, row.pending_plan, scopeDone, planActions);
+}
+
+function countPlanSubRows(
+  row: DashboardOverviewRow,
+  scopeKey: string,
+  scopeDone: Record<string, { planId: number; action: PlanAction }>,
+  planActions: Record<number, PlanAction>,
+): number {
+  return shouldShowPendingPlan(row, scopeKey, scopeDone, planActions) ? 1 : 0;
+}
+
+/** Ẩn đề xuất bảo trì sau duyệt trong session hoặc khi cửa sổ bảo trì đã active. */
 function shouldShowPendingMaintenance(
   row: DashboardOverviewRow,
   scopeKey: string,
   maintScopeDone: Record<string, { maintId: number; action: PlanAction }>,
   maintActions: Record<number, PlanAction>,
 ): boolean {
+  if (!shouldShowManualApproval(row)) return false;
   if (!row.pending_maintenance) return false;
   if (row.maintenance) return false;
   if (maintScopeDone[scopeKey]?.action === 'approved') return false;
@@ -145,9 +153,7 @@ function countSubRows(
   maintActions: Record<number, PlanAction>,
 ): number {
   let n = 0;
-  if (row.pending_plan && !isRoutingRejected(scopeKey, row.pending_plan, scopeDone, planActions)) {
-    n += 1;
-  }
+  n += countPlanSubRows(row, scopeKey, scopeDone, planActions);
   if (shouldShowPendingMaintenance(row, scopeKey, maintScopeDone, maintActions)) {
     n += 1;
   }
@@ -183,6 +189,11 @@ export interface ScopeRoutingPayload {
   skuCode: string;
   routing: Record<string, number>;
   plan: NonNullable<DashboardOverviewRow['pending_plan']>['plan'];
+}
+
+export interface ScopeRestoreProviderPayload {
+  productCode: string;
+  skuCode: string;
 }
 
 export interface ScopeRoutingApplyPayload {
@@ -222,6 +233,7 @@ interface Props {
   onReject?: (planId: number) => void;
   onApproveScope?: (payload: ScopeRoutingPayload) => void;
   onRejectScope?: (payload: ScopeRoutingPayload) => void;
+  onRestoreProviderRouting?: (payload: ScopeRestoreProviderPayload) => void;
   onApplyScopeRouting?: (payload: ScopeRoutingApplyPayload) => void;
   onApproveMaintenance?: (payload: MaintenanceApprovePayload) => void;
   onRejectMaintenance?: (recommendationId: number) => void;
@@ -234,7 +246,7 @@ interface Props {
   busyScopeKey?: string | null;
   planActions?: Record<number, PlanAction>;
   maintActions?: Record<number, PlanAction>;
-  scopeDone?: Record<string, { planId: number; action: PlanAction }>;
+  scopeDone?: Record<string, { planId: number; action: PlanAction; rejectedRouting?: Record<string, number> }>;
   maintScopeDone?: Record<string, { maintId: number; action: PlanAction }>;
   updatedAt?: string;
 }
@@ -243,11 +255,11 @@ export function ServiceOverviewTable({
   rows,
   providers = [...PROVIDERS],
   thresholdsByProduct = {},
-  refreshing = false,
   onApprove,
   onReject,
   onApproveScope,
   onRejectScope,
+  onRestoreProviderRouting,
   onApplyScopeRouting,
   onApproveMaintenance,
   onRejectMaintenance,
@@ -265,6 +277,7 @@ export function ServiceOverviewTable({
   updatedAt,
 }: Props) {
   const [draftRouting, setDraftRouting] = useState<Record<DraftKey, Record<string, number>>>({});
+  const [dirtyPlanDraftKeys, setDirtyPlanDraftKeys] = useState<Set<string>>(new Set());
   const [restoreScopeKey, setRestoreScopeKey] = useState<string | null>(null);
   const [restoreDraft, setRestoreDraft] = useState<Record<string, Record<string, number>>>({});
   const [maintWindowDraft, setMaintWindowDraft] = useState<
@@ -293,6 +306,19 @@ export function ServiceOverviewTable({
   }, [rows, updatedAt]);
 
   useEffect(() => {
+    setDirtyPlanDraftKeys((prev) => {
+      const active = new Set<string>();
+      for (const row of rows) {
+        const plan = row.pending_plan;
+        if (!plan?.plan?.proposed_pct) continue;
+        active.add(String(planDraftKey(plan.id, `${row.product_code}:${row.sku_code}`)));
+      }
+      const next = new Set([...prev].filter((k) => active.has(k)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rows]);
+
+  useEffect(() => {
     setDraftRouting((prev) => {
       let changed = false;
       const next = { ...prev };
@@ -309,25 +335,33 @@ export function ServiceOverviewTable({
         ) {
           continue;
         }
-        const fresh = initialRoutingPct(plan.plan.proposed_pct, row.routing_pct, providers);
+        if (dirtyPlanDraftKeys.has(String(dk))) {
+          continue;
+        }
+        const planProviders = activeRoutingProviders(providers, row.routing_pct, plan.plan);
+        const fresh = initialRoutingPct(plan.plan.proposed_pct, row.routing_pct, planProviders);
         const existing = next[dk];
-        if (!existing || !routingPctMapsEqual(existing, fresh, providers)) {
+        if (!existing || !routingPctMapsEqual(existing, fresh, planProviders)) {
           next[dk] = fresh;
           changed = true;
         }
       }
       return changed ? next : prev;
     });
-  }, [rows, providers, updatedAt]);
+  }, [rows, providers, updatedAt, dirtyPlanDraftKeys]);
+
+  const markPlanDraftDirty = (dk: DraftKey) => {
+    setDirtyPlanDraftKeys((prev) => {
+      const key = String(dk);
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  };
 
   return (
     <div className="overview-table-wrap">
-      {updatedAt && (
-        <p className="overview-table__meta muted">
-          Cập nhật: {new Date(updatedAt).toLocaleString('vi-VN')} · tự làm mới mỗi 60 giây
-          {refreshing ? ' · đang cập nhật…' : ''}
-        </p>
-      )}
       <div className="table-scroll">
         <table className="data-table overview-table">
           <colgroup>
@@ -337,12 +371,11 @@ export function ServiceOverviewTable({
             {providers.map((p) => (
               <col key={p} className="overview-table__col-provider" />
             ))}
-            <col className="overview-table__col-auto" />
             <col className="overview-table__col-maint" />
+            <col className="overview-table__col-auto" />
           </colgroup>
           {groupRowsByProduct(rows).map((group) => {
               const planLabelColSpan = 2;
-              const tableColCount = planLabelColSpan + providers.length + 2;
               const bodyRowCount = groupBodyRowCount(
                 group,
                 scopeDone,
@@ -375,7 +408,7 @@ export function ServiceOverviewTable({
                   plan &&
                   !routingRejected &&
                   !localAction &&
-                  !done &&
+                  done?.action !== 'approved' &&
                   (isSuggested ||
                     plan.status === 'pending_approve' ||
                     plan.status === 'draft');
@@ -404,7 +437,7 @@ export function ServiceOverviewTable({
                 const draft =
                   plan
                     ? draftRouting[draftKey] ??
-                      initialRoutingPct(plan.plan?.proposed_pct, row.routing_pct, providers)
+                      initialRoutingPct(plan.plan?.proposed_pct, row.routing_pct, activeProviders)
                     : {};
                 const routingError = routingPctValidationError(draft, activeProviders);
                 const routingValid = routingError === null;
@@ -415,14 +448,36 @@ export function ServiceOverviewTable({
                   countSubRows(row, scopeKey, scopeDone, maintScopeDone, planActions, maintActions) > 0;
                 const isRestoring = restoreScopeKey === scopeKey;
                 const restoreValues =
-                  restoreDraft[scopeKey] ?? initialRoutingPct(undefined, row.routing_pct, providers);
+                  restoreDraft[scopeKey] ??
+                  initialRoutingPct(undefined, row.routing_pct, activeProviders);
                 const restoreError = isRestoring
                   ? routingPctValidationError(restoreValues, activeProviders)
                   : null;
                 const restoreValid = restoreError === null;
+                const baselineDraft = baselineRoutingPct(row.baseline_pct, activeProviders);
+
+                const saveRoutingDraft = (values: Record<string, number>) => {
+                  if (routingPctValidationError(values, activeProviders)) return;
+                  if (
+                    baselineDraft &&
+                    routingPctMapsEqual(values, baselineDraft, activeProviders) &&
+                    onRestoreProviderRouting
+                  ) {
+                    onRestoreProviderRouting({
+                      productCode: row.product_code,
+                      skuCode: row.sku_code,
+                    });
+                    return;
+                  }
+                  onApplyScopeRouting?.({
+                    productCode: row.product_code,
+                    skuCode: row.sku_code,
+                    routing: values,
+                  });
+                };
 
                 const buildRestoreRow = () => {
-                  if (!isRestoring || !onApplyScopeRouting) return null;
+                  if (!isRestoring || !onRestoreProviderRouting) return null;
                   return (
                     <tr
                       key={`${row.product_code}-${row.sku_code}-restore`}
@@ -433,7 +488,8 @@ export function ServiceOverviewTable({
                       </td>
                       {providers.map((p) => {
                         const supported = isProviderSupported(p);
-                        const invalid = supported && routingPctFieldInvalid(p, restoreValues, providers);
+                        const invalid =
+                          supported && routingPctFieldInvalid(p, restoreValues, providers);
                         return (
                           <td key={p} className="mono nowrap overview-table__plan-pct">
                             {supported ? (
@@ -466,24 +522,40 @@ export function ServiceOverviewTable({
                           </td>
                         );
                       })}
-                      <td className="muted">—</td>
-                      <td className="overview-table__plan-actions">
+                      <td colSpan={2} className="overview-table__plan-actions">
                         <div className="overview-table__plan-actions-inner">
                           {restoreError && (
                             <span className="overview-table__plan-error">{restoreError}</span>
                           )}
                           <button
                             type="button"
+                            className="btn btn--ghost btn--xs"
+                            disabled={scopeBusy || !baselineDraft}
+                            title={
+                              baselineDraft
+                                ? 'Điền tỷ lệ routing theo baseline biz'
+                                : 'Chưa có dữ liệu baseline'
+                            }
+                            onClick={() => {
+                              if (!baselineDraft) return;
+                              setRestoreDraft((prev) => ({
+                                ...prev,
+                                [scopeKey]: baselineDraft,
+                              }));
+                            }}
+                          >
+                            Trả lại
+                          </button>
+                          <button
+                            type="button"
                             className="btn btn--primary btn--xs"
                             disabled={scopeBusy || !restoreValid}
-                            title={restoreValid ? 'Áp dụng routing đã nhập' : (restoreError ?? 'Chưa hợp lệ')}
+                            title={
+                              restoreValid ? 'Áp dụng routing đã nhập' : (restoreError ?? 'Chưa hợp lệ')
+                            }
                             onClick={() => {
                               if (!restoreValid) return;
-                              onApplyScopeRouting({
-                                productCode: row.product_code,
-                                skuCode: row.sku_code,
-                                routing: restoreValues,
-                              });
+                              saveRoutingDraft(restoreValues);
                             }}
                           >
                             {scopeBusy ? '…' : 'Lưu'}
@@ -503,48 +575,78 @@ export function ServiceOverviewTable({
                 };
 
                 const skuHealth = effectiveRowHealth(row, productThreshold);
+                const inMaintenance = isSkuUnderActiveMaintenance(row);
 
                 const skuRow = (
-                  <tr key={`${row.product_code}-${row.sku_code}`}>
+                  <tr
+                    key={`${row.product_code}-${row.sku_code}`}
+                    id={`overview-scope-${scopeKey}`}
+                    className={[
+                      'overview-table__sku-row',
+                      !inMaintenance && skuHealth === 'red' ? 'overview-table__sku-row--alert' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ') || undefined}
+                  >
                     {isFirstInGroup && (
                       <td
                         rowSpan={bodyRowCount}
                         className="overview-table__product-cell overview-table__product-cell--group"
                       >
                         <span className="overview-table__product-name">{group.productLabel}</span>
-                        <span className="muted overview-table__product-code">{group.productCode}</span>
-                        {group.rows.length > 1 && (
-                          <span className="overview-table__sku-count muted">
-                            {group.rows.length} SKU
-                          </span>
-                        )}
                       </td>
                     )}
-                    <td className="nowrap overview-table__sku-cell">{fmtSku(row.sku_code)}</td>
-                    <td>
-                      <HealthBadge
-                        status={skuHealth}
-                        label={
-                          isPending
-                            ? 'Kế hoạch routing chờ duyệt'
-                            : isPendingMaint
-                              ? 'Đề xuất bảo trì chờ duyệt'
-                              : skuHealth === 'red'
-                                ? 'Vượt ngưỡng — đủ chu kỳ liên tiếp'
-                                : skuHealth === 'yellow'
-                                  ? 'Đang theo dõi — vượt ngưỡng'
-                                  : undefined
-                        }
-                        compact
-                      />
-                    </td>
+                    {row.maintenance ? (
+                      <td
+                        colSpan={2}
+                        className="overview-table__sku-cell overview-table__sku-cell--with-maint"
+                      >
+                        <div className="overview-table__sku-cell-inner">
+                          <span className="overview-table__sku-name">{fmtSku(row.sku_code)}</span>
+                          <SkuMaintenanceTimeLabel
+                            startsAt={String(row.maintenance.starts_at ?? '')}
+                            endsAt={String(row.maintenance.ends_at ?? '')}
+                            title={row.maintenance.reason ?? row.maintenance.label_vi}
+                          />
+                        </div>
+                      </td>
+                    ) : (
+                      <>
+                        <td className="overview-table__sku-cell">
+                          <div className="overview-table__sku-cell-inner">
+                            <span className="overview-table__sku-name">{fmtSku(row.sku_code)}</span>
+                          </div>
+                        </td>
+                        <td>
+                          <HealthBadge
+                            status={skuHealth}
+                            label={
+                              isPending
+                                ? 'Kế hoạch routing chờ duyệt'
+                                : isPendingMaint
+                                  ? 'Đề xuất bảo trì chờ duyệt'
+                                  : skuHealth === 'red'
+                                    ? 'Vượt ngưỡng — đủ chu kỳ liên tiếp'
+                                    : skuHealth === 'yellow'
+                                      ? 'Đang theo dõi — vượt ngưỡng'
+                                      : undefined
+                            }
+                            compact
+                          />
+                        </td>
+                      </>
+                    )}
                     {providers.map((p) => {
                       const supported = isProviderSupported(p);
                       const routingPct = row.routing_pct?.[p];
                       const maintained = isProviderUnderMaintenance(row, p);
                       const inactive = supported && !maintained && (routingPct ?? 0) <= 0;
                       const reopenBlocked =
-                        isPending || isPendingMaint || Boolean(row.maintenance) || !onApplyScopeRouting;
+                        isPending ||
+                        isPendingMaint ||
+                        Boolean(row.maintenance) ||
+                        !onRestoreProviderRouting ||
+                        (restoreScopeKey != null && restoreScopeKey !== scopeKey);
                       return (
                         <ProviderMetricCell
                           key={p}
@@ -555,7 +657,7 @@ export function ServiceOverviewTable({
                           threshold={productThreshold}
                           inactive={inactive}
                           maintained={maintained}
-                          reopenDisabled={reopenBlocked || (restoreScopeKey != null && restoreScopeKey !== scopeKey)}
+                          reopenDisabled={reopenBlocked}
                           reopenBusy={scopeBusy}
                           scopeRestoring={isRestoring}
                           onReopen={
@@ -564,7 +666,7 @@ export function ServiceOverviewTable({
                                   setRestoreScopeKey(scopeKey);
                                   setRestoreDraft((prev) => ({
                                     ...prev,
-                                    [scopeKey]: initialRoutingPct(undefined, row.routing_pct, providers),
+                                    [scopeKey]: initialRoutingPct(undefined, row.routing_pct, activeProviders),
                                   }));
                                 }
                               : undefined
@@ -572,6 +674,25 @@ export function ServiceOverviewTable({
                         />
                       );
                     })}
+                    <td className="overview-table__maint-cell">
+                      {inMaintenance ? (
+                        <ActiveMaintenanceCell
+                          row={row}
+                          busy={scopeBusy}
+                          onReopen={onReopenMaintenance}
+                          onExtend={onExtendMaintenance}
+                        />
+                      ) : (
+                        onApproveScopeMaintenance && (
+                          <ServiceMaintenanceButton
+                            productCode={row.product_code}
+                            skuCode={row.sku_code}
+                            busy={scopeBusy}
+                            onStart={onApproveScopeMaintenance}
+                          />
+                        )
+                      )}
+                    </td>
                     <td className="overview-table__auto-cell">
                       <ScopeAutoEditor
                         productCode={row.product_code}
@@ -583,20 +704,14 @@ export function ServiceOverviewTable({
                         }}
                       />
                     </td>
-                    <td className="overview-table__maint-cell">
-                      <ActiveMaintenanceCell
-                        row={row}
-                        busy={scopeBusy}
-                        onReopen={onReopenMaintenance}
-                        onExtend={onExtendMaintenance}
-                      />
-                    </td>
                   </tr>
                 );
 
                 if (!showPlanRow) {
                   const restoreRow = buildRestoreRow();
-                  return restoreRow ? [skuRow, restoreRow] : [skuRow];
+                  return markScopeBlockEnd(
+                    restoreRow ? [skuRow, restoreRow] : [skuRow],
+                  );
                 }
 
                 const subRows: ReactNode[] = [];
@@ -622,7 +737,9 @@ export function ServiceOverviewTable({
                   const maintBusy = scopeBusy || (maintId != null && busyMaintId === maintId);
                   const maintWindow = maintWindowDraft[scopeKey] ?? defaultMaintenanceWindow();
                   const maintWindowErr = maintenanceWindowError(maintWindow.startsAt, maintWindow.endsAt);
-                  const maintISO = maintenanceWindowISO(maintWindow.startsAt, maintWindow.endsAt);
+                  const maintISO = maintWindowErr
+                    ? null
+                    : maintenanceWindowISO(maintWindow.startsAt, maintWindow.endsAt);
                   const skuWideMaint =
                     Boolean(pm.scope_level) || isSkuWideMaintenance(pm.reason);
                   subRows.push(
@@ -631,17 +748,25 @@ export function ServiceOverviewTable({
                       className="overview-table__plan-row overview-table__maint-suggest-row"
                       title={pm.reason}
                     >
-                      <td colSpan={tableColCount} className="overview-table__maint-suggest-cell">
-                        <div className="maint-suggest-bar">
-                          <span className="maint-suggest-bar__label">Đề xuất bảo trì</span>
-                          <span className="maint-suggest-bar__message" title={pm.reason}>
-                            {maintenanceSuggestLabel(pm)}
-                          </span>
+                      <td colSpan={planLabelColSpan} className="overview-table__plan-label">
+                        Đề xuất bảo trì
+                      </td>
+                      <td colSpan={2} className="overview-table__maint-suggest-message">
+                        <span className="maint-suggest-bar__message" title={pm.reason}>
+                          {maintenanceSuggestLabel(pm)}
+                        </span>
+                      </td>
+                      <td
+                        colSpan={providers.length}
+                        className="overview-table__plan-actions overview-table__maint-suggest-actions"
+                      >
+                        <div className="maint-suggest-bar maint-suggest-bar--even">
                           {canActMaint && (
                             <div className="maint-suggest-bar__window">
                               <DateTimeLocalField
-                                label="Bắt đầu"
-                                className="maint-suggest-bar__field"
+                                label="Từ"
+                                compact
+                                className="datetime-local-field maint-suggest-bar__field"
                                 value={maintWindow.startsAt}
                                 disabled={maintBusy}
                                 onChange={(startsAt) =>
@@ -652,8 +777,9 @@ export function ServiceOverviewTable({
                                 }
                               />
                               <DateTimeLocalField
-                                label="Kết thúc"
-                                className="maint-suggest-bar__field"
+                                label="Đến"
+                                compact
+                                className="datetime-local-field maint-suggest-bar__field"
                                 value={maintWindow.endsAt}
                                 disabled={maintBusy}
                                 onChange={(endsAt) =>
@@ -670,24 +796,27 @@ export function ServiceOverviewTable({
                               <button
                                 type="button"
                                 className="btn btn--primary btn--xs"
-                                disabled={maintBusy || Boolean(maintWindowErr)}
+                                disabled={maintBusy || Boolean(maintWindowErr) || !maintISO}
                                 title="Lên lịch bảo trì theo khung giờ đã chọn"
-                                onClick={() =>
-                                  canActMaintReal && maintId != null
-                                    ? onApproveMaintenance!({
-                                        recommendationId: maintId,
-                                        startsAt: maintISO.starts_at,
-                                        endsAt: maintISO.ends_at,
-                                      })
-                                    : onApproveScopeMaintenance!({
-                                        productCode: row.product_code,
-                                        skuCode: row.sku_code,
-                                        reason: pm.reason,
-                                        providerCode: skuWideMaint ? undefined : pm.provider_code,
-                                        startsAt: maintISO.starts_at,
-                                        endsAt: maintISO.ends_at,
-                                      })
-                                }
+                                onClick={() => {
+                                  if (!maintISO) return;
+                                  if (canActMaintReal && maintId != null) {
+                                    onApproveMaintenance!({
+                                      recommendationId: maintId,
+                                      startsAt: maintISO.starts_at,
+                                      endsAt: maintISO.ends_at,
+                                    });
+                                    return;
+                                  }
+                                  onApproveScopeMaintenance!({
+                                    productCode: row.product_code,
+                                    skuCode: row.sku_code,
+                                    reason: pm.reason,
+                                    providerCode: skuWideMaint ? undefined : pm.provider_code,
+                                    startsAt: maintISO.starts_at,
+                                    endsAt: maintISO.ends_at,
+                                  });
+                                }}
                               >
                                 {maintBusy ? '…' : 'Duyệt'}
                               </button>
@@ -726,14 +855,11 @@ export function ServiceOverviewTable({
                   );
                 }
 
-                if ((!plan || routingRejected) && subRows.length > 0) {
+                if (!shouldShowPendingPlan(row, scopeKey, scopeDone, planActions)) {
                   const restoreRow = buildRestoreRow();
-                  return restoreRow ? [skuRow, ...subRows, restoreRow] : [skuRow, ...subRows];
-                }
-
-                if (!plan || routingRejected) {
-                  const restoreRow = buildRestoreRow();
-                  return restoreRow ? [skuRow, restoreRow] : [skuRow];
+                  const out: ReactElement[] = [skuRow, ...subRows];
+                  if (restoreRow) out.push(restoreRow);
+                  return markScopeBlockEnd(out);
                 }
 
                 const planValues = canAct ? draft : displayPct;
@@ -767,6 +893,7 @@ export function ServiceOverviewTable({
                                   onChange={(e) => {
                                     const raw = e.target.value;
                                     const n = raw === '' ? 0 : Number.parseFloat(raw);
+                                    markPlanDraftDirty(draftKey);
                                     setDraftRouting((prev) => ({
                                       ...prev,
                                       [draftKey]: {
@@ -780,7 +907,9 @@ export function ServiceOverviewTable({
                               </span>
                             ) : (
                               <span className="provider-metric-line provider-metric-line--route">
-                                {planValues[p] != null ? `${Math.round(planValues[p] * 10) / 10}%` : '—'}
+                                {planValues[p] != null
+                                  ? `${Math.round(planValues[p] * 10) / 10}%`
+                                  : '—'}
                               </span>
                             )
                           ) : (
@@ -789,8 +918,7 @@ export function ServiceOverviewTable({
                         </td>
                       );
                     })}
-                    <td className="muted">—</td>
-                    <td className="overview-table__plan-actions">
+                    <td colSpan={2} className="overview-table__plan-actions">
                       <div className="overview-table__plan-actions-inner">
                         {plan ? (
                           <>
@@ -808,7 +936,7 @@ export function ServiceOverviewTable({
                                   }
                                   title={
                                     routingValid
-                                      ? 'Áp dụng routing đã nhập'
+                                      ? 'Duyệt và áp dụng routing đã nhập'
                                       : (routingError ?? 'Chưa hợp lệ')
                                   }
                                   onClick={() =>
@@ -844,7 +972,9 @@ export function ServiceOverviewTable({
                               </>
                             )}
                             {localAction && planId != null && (
-                              <span className={`plan-row__done ${planBadgeClass(plan.status, localAction)}`}>
+                              <span
+                                className={`plan-row__done ${planBadgeClass(plan.status, localAction)}`}
+                              >
                                 {planStatusLabel(plan.status, localAction)} #{planId}
                               </span>
                             )}
@@ -860,9 +990,11 @@ export function ServiceOverviewTable({
                 );
 
                 const restoreRow = buildRestoreRow();
-                return restoreRow
-                  ? [skuRow, ...subRows, planRow, restoreRow]
-                  : [skuRow, ...subRows, planRow];
+                return markScopeBlockEnd(
+                  restoreRow
+                    ? [skuRow, ...subRows, planRow, restoreRow]
+                    : [skuRow, ...subRows, planRow],
+                );
                   })}
                 </tbody>
               );

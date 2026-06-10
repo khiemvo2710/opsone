@@ -121,6 +121,24 @@ func (s *Server) handleScopeRoutingApply(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, http.StatusOK, map[string]any{"applied": out.Applied, "change_log_ids": out.ChangeLogIDs})
 }
 
+func (s *Server) handleScopeRoutingRestoreBaseline(w http.ResponseWriter, r *http.Request, product, sku string) {
+	if !requireAdmin(w, r, s.Config.DevAuthBypass) {
+		return
+	}
+	ctx := r.Context()
+	by := actorFromRequest(r, s.Config.DevAuthBypass)
+	out, proposed, err := s.applyScopeReopenRouting(ctx, product, sku, by, "")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "routing_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"applied":        out.Applied,
+		"change_log_ids": out.ChangeLogIDs,
+		"proposed_pct":   proposed,
+	})
+}
+
 func (s *Server) handleScopeRoutingReject(w http.ResponseWriter, r *http.Request, product, sku string) {
 	if !requireAdmin(w, r, s.Config.DevAuthBypass) {
 		return
@@ -142,6 +160,7 @@ func (s *Server) handleScopeRoutingReject(w http.ResponseWriter, r *http.Request
 		body.Plan.SKU = sku
 		body.Plan.Scope = scope
 	}
+	_ = s.DB.CancelPendingRoutingPlansForScope(ctx, product, sku)
 	planID, err := s.DB.InsertRoutingPlan(ctx, nil, product, scope, sku, body.Plan, "rejected")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
@@ -237,7 +256,8 @@ func (s *Server) handleScopeMaintenanceReject(w http.ResponseWriter, r *http.Req
 	if detail == "" {
 		detail = "Đề xuất bảo trì"
 	}
-	if err := s.DB.InsertRecommendation(ctx, nil, nil, product, sku, "maintenance", "DISMISSED: "+detail); err != nil {
+	by := actorFromRequest(r, s.Config.DevAuthBypass)
+	if err := s.dismissMaintenanceSuggestion(ctx, product, sku, detail, by); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
@@ -258,7 +278,12 @@ func (s *Server) handleScopeMaintenanceCancel(w http.ResponseWriter, r *http.Req
 	var err error
 	if len(body.MaintenanceIDs) > 0 {
 		n, err = s.DB.CancelMaintenanceByIDs(ctx, body.MaintenanceIDs, by)
-	} else {
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+	}
+	if n == 0 {
 		n, err = s.DB.CancelActiveMaintenanceForSKU(ctx, product, sku, by)
 	}
 	if err != nil {
@@ -274,6 +299,49 @@ func (s *Server) handleScopeMaintenanceCancel(w http.ResponseWriter, r *http.Req
 		"sku_code":     sku,
 		"status":       "cancelled",
 		"cancelled":    n,
+	})
+}
+
+// handleScopeMaintenanceReopenService ends active maintenance and restores baseline biz atomically (§8.6.3 / §9.0).
+func (s *Server) handleScopeMaintenanceReopenService(w http.ResponseWriter, r *http.Request, product, sku string) {
+	if !requireAdmin(w, r, s.Config.DevAuthBypass) {
+		return
+	}
+	ctx := r.Context()
+	var body struct {
+		MaintenanceIDs []string `json:"maintenance_ids"`
+	}
+	_ = decodeJSON(r, &body)
+	by := actorFromRequest(r, s.Config.DevAuthBypass)
+
+	var cancelled int64
+	var err error
+	if len(body.MaintenanceIDs) > 0 {
+		cancelled, err = s.DB.CancelMaintenanceByIDs(ctx, body.MaintenanceIDs, by)
+	} else {
+		cancelled, err = s.DB.CancelActiveMaintenanceForSKU(ctx, product, sku, by)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	_ = s.DB.CancelPendingRoutingPlansForScope(ctx, product, sku)
+
+	reason := fmt.Sprintf("Mở lại dịch vụ %s/%s — baseline biz (metric chu kỳ Agent)", product, sku)
+	out, proposed, err := s.applyScopeReopenRouting(ctx, product, sku, by, reason)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "reopen_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"product_code":   product,
+		"sku_code":       sku,
+		"status":         "reopened",
+		"cancelled":      cancelled,
+		"applied":        out.Applied,
+		"change_log_ids": out.ChangeLogIDs,
+		"proposed_pct":   proposed,
 	})
 }
 
@@ -299,6 +367,15 @@ func (s *Server) handleScopeMaintenanceExtend(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if n == 0 {
+		active, err := s.DB.CountActiveMaintenanceForSKU(ctx, product, sku)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		if active > 0 {
+			writeError(w, http.StatusBadRequest, "no_change", "Thời gian bảo trì không thay đổi")
+			return
+		}
 		writeError(w, http.StatusNotFound, "not_found", "Không có cửa sổ bảo trì đang hoạt động")
 		return
 	}

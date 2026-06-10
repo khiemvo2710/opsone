@@ -10,6 +10,11 @@ export function isSkuWideMaintenance(reason?: string): boolean {
   return Boolean(reason?.includes('Tất cả provider đang routing'));
 }
 
+/** Lý do bảo trì SKU thủ công từ nút「Bảo trì dịch vụ」— khớp maintenanceTargetsForScope backend. */
+export function manualServiceMaintenanceReason(): string {
+  return 'Tất cả provider đang routing — Bảo trì dịch vụ thủ công';
+}
+
 export function maintenanceSuggestLabel(pm: {
   provider_code?: string;
   reason?: string;
@@ -18,17 +23,23 @@ export function maintenanceSuggestLabel(pm: {
   if (isSkuWideMaintenance(pm.reason) || pm.scope_level) {
     return pm.reason ?? 'Đề xuất bảo trì SKU';
   }
-  if (pm.provider_code) {
-    return `${pm.provider_code} · ${pm.reason ?? 'Vượt ngưỡng'}`;
-  }
   return pm.reason ?? 'Vượt ngưỡng';
 }
 
-export function maintenanceActiveLabel(startsAt: string, endsAt: string): string {
+export function maintenanceActiveTimes(
+  startsAt: string,
+  endsAt: string,
+): { start: string; end: string } | null {
   const start = formatDatetimeVi(isoToDatetimeLocalValue(startsAt));
   const end = formatDatetimeVi(isoToDatetimeLocalValue(endsAt));
-  if (!start || !end) return 'Bảo trì đang hoạt động';
-  return `Bảo trì từ ${start} - ${end}`;
+  if (!start || !end) return null;
+  return { start, end };
+}
+
+export function maintenanceActiveLabel(startsAt: string, endsAt: string): string {
+  const times = maintenanceActiveTimes(startsAt, endsAt);
+  if (!times) return 'Bảo trì đang hoạt động';
+  return `Bảo trì từ ${times.start} - ${times.end}`;
 }
 
 export function defaultMaintenanceWindow(durationMin = 60): { startsAt: string; endsAt: string } {
@@ -56,9 +67,25 @@ export function maintenanceWindowError(startsAt: string, endsAt: string): string
   return null;
 }
 
-export function maintenanceWindowISO(startsAt: string, endsAt: string): { starts_at: string; ends_at: string } {
+export function maintenanceWindowISO(
+  startsAt: string,
+  endsAt: string,
+): { starts_at: string; ends_at: string } | null {
+  if (maintenanceWindowError(startsAt, endsAt)) {
+    return null;
+  }
   return {
     starts_at: new Date(startsAt).toISOString(),
     ends_at: new Date(endsAt).toISOString(),
   };
+}
+
+export function maintenanceWindowUnchanged(
+  a: { startsAt: string; endsAt: string },
+  b: { startsAt: string; endsAt: string },
+): boolean {
+  const isoA = maintenanceWindowISO(a.startsAt, a.endsAt);
+  const isoB = maintenanceWindowISO(b.startsAt, b.endsAt);
+  if (!isoA || !isoB) return false;
+  return isoA.starts_at === isoB.starts_at && isoA.ends_at === isoB.ends_at;
 }

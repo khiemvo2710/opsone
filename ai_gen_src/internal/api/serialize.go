@@ -77,29 +77,6 @@ func routingPlanJSON(r store.RoutingPlanRow) map[string]any {
 	return m
 }
 
-func agentChangeJSON(r store.AgentChangeListItem) map[string]any {
-	return map[string]any{
-		"id":             r.ID,
-		"product_code":   r.ProductCode,
-		"scope":          r.Scope,
-		"sku_code":       r.SKUCode,
-		"trigger_type":   r.TriggerType,
-		"change_status":  r.ChangeStatus,
-		"routing_before": parseRoutingMap(r.RoutingBefore),
-		"routing_after":  parseRoutingMap(r.RoutingAfter),
-		"created_at":     r.CreatedAt,
-	}
-}
-
-func parseRoutingMap(raw json.RawMessage) map[string]float64 {
-	if len(raw) == 0 {
-		return nil
-	}
-	var m map[string]float64
-	_ = json.Unmarshal(raw, &m)
-	return m
-}
-
 func maintenanceJSON(r store.MaintenanceRow) map[string]any {
 	m := map[string]any{
 		"maintenance_id": r.MaintenanceID,

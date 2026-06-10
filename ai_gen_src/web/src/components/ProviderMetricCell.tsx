@@ -161,6 +161,7 @@ export function ProviderMetricCell({
           type="button"
           className="btn btn--ghost btn--xs provider-metric-cell__reopen"
           disabled={reopenDisabled || reopenBusy}
+          title="Mở lại provider — chỉnh % routing"
           onClick={onReopen}
         >
           {reopenBusy ? '…' : 'Mở lại'}

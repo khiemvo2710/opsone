@@ -211,6 +211,91 @@ func TestProposeShiftSkipsMaintainedTarget(t *testing.T) {
 	}
 }
 
+func TestShouldForceAutoMaintenanceSingleActiveBreached(t *testing.T) {
+	th := store.ProductThreshold{
+		Enabled:            true,
+		SuccessRateMinPct:  82,
+		PendingRateMaxPct:  14,
+		FailRateMaxPct:     10,
+		FailTxnCountMax:    60,
+		PendingTxnCountMax: 8,
+	}
+	routing := map[string]float64{"ESALE": 0, "IMEDIA": 100}
+	pc := ProductContext{
+		MaintainedProviders: map[string]bool{"ESALE": true},
+		Scopes: []ScopeContext{
+			{SKUCode: "V50K", ProviderCode: "IMEDIA", Metrics: &tools.GetMetricsOutput{SuccessRate: 96.1, PendingRate: 1.7, FailRate: 2.2, TotalTransactions: 1000}},
+		},
+	}
+	if !ShouldForceAutoMaintenance(pc, "V50K", routing, th) {
+		t.Fatal("expected force maintenance when single active provider breaches pending_txn")
+	}
+}
+
+func TestShouldForceAutoRoutingWithHealthyBackup(t *testing.T) {
+	th := defaultTestThreshold()
+	routing := map[string]float64{"ESALE": 50, "IMEDIA": 30, "SHOPPAY": 20}
+	pc := ProductContext{
+		Scopes: []ScopeContext{
+			{
+				SKUCode: "V100K", ProviderCode: "ESALE",
+				Metrics: &tools.GetMetricsOutput{SuccessRate: 96, PendingRate: 2, FailRate: 2, TotalTransactions: 1000},
+			},
+			{
+				SKUCode: "V100K", ProviderCode: "IMEDIA",
+				Metrics: &tools.GetMetricsOutput{SuccessRate: 97, PendingRate: 0.3, FailRate: 2, TotalTransactions: 1000},
+			},
+			{
+				SKUCode: "V100K", ProviderCode: "SHOPPAY",
+				Metrics: &tools.GetMetricsOutput{SuccessRate: 96, PendingRate: 2.2, FailRate: 2, TotalTransactions: 1000},
+			},
+		},
+	}
+	if !ShouldForceAutoRouting(pc, "V100K", routing, th) {
+		t.Fatal("expected force routing when one provider healthy and others breach")
+	}
+}
+
+func TestShouldForceAutoMaintenanceAllProviders(t *testing.T) {
+	th := defaultTestThreshold()
+	routing := map[string]float64{"ESALE": 60, "IMEDIA": 40}
+	pc := ProductContext{
+		Scopes: []ScopeContext{
+			{
+				SKUCode: "V50K", ProviderCode: "ESALE",
+				Metrics: &tools.GetMetricsOutput{SuccessRate: 96, PendingRate: 2, FailRate: 2, TotalTransactions: 1000},
+			},
+			{
+				SKUCode: "V50K", ProviderCode: "IMEDIA",
+				Metrics: &tools.GetMetricsOutput{SuccessRate: 96, PendingRate: 2.5, FailRate: 2, TotalTransactions: 1000},
+			},
+		},
+	}
+	if !ShouldForceAutoMaintenanceAllProviders(pc, "V50K", routing, th) {
+		t.Fatal("expected force maintenance when all active providers breach")
+	}
+}
+
+func TestShouldForceAutoMaintenanceAllProvidersSkipsSingleHealthy(t *testing.T) {
+	th := defaultTestThreshold()
+	routing := map[string]float64{"ESALE": 80, "IMEDIA": 20}
+	pc := ProductContext{
+		Scopes: []ScopeContext{
+			{
+				SKUCode: "V50K", ProviderCode: "ESALE",
+				Metrics: &tools.GetMetricsOutput{SuccessRate: 96, PendingRate: 6, FailRate: 2, TotalTransactions: 1000},
+			},
+			{
+				SKUCode: "V50K", ProviderCode: "IMEDIA",
+				Metrics: &tools.GetMetricsOutput{SuccessRate: 97, PendingRate: 0.3, FailRate: 2, TotalTransactions: 1000},
+			},
+		},
+	}
+	if ShouldForceAutoMaintenanceAllProviders(pc, "V50K", routing, th) {
+		t.Fatal("expected no force maintenance when a healthy backup exists")
+	}
+}
+
 func TestSKURoutingDecisionSingleHealthyBackup(t *testing.T) {
 	th := defaultTestThreshold()
 	routing := map[string]float64{"ESALE": 80, "IMEDIA": 20}

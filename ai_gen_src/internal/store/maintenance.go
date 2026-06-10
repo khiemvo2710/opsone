@@ -144,6 +144,21 @@ func (db *DB) CancelMaintenanceByIDs(ctx context.Context, ids []string, cancelle
 	return n, nil
 }
 
+// CountActiveMaintenanceForSKU counts scheduled/active windows still in effect for a scope.
+func (db *DB) CountActiveMaintenanceForSKU(ctx context.Context, product, sku string) (int64, error) {
+	const query = `
+		SELECT COUNT(*) FROM maintenance_windows
+		WHERE product_code = ? AND sku_code = ?
+		  AND status IN ('scheduled', 'active')
+		  AND ends_at > NOW()`
+	var n int64
+	err := db.QueryRowContext(ctx, query, product, sku).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count active maintenance: %w", err)
+	}
+	return n, nil
+}
+
 // UpdateActiveMaintenanceTimesForSKU updates starts/ends for all active windows on a scope.
 func (db *DB) UpdateActiveMaintenanceTimesForSKU(ctx context.Context, product, sku string, startsAt, endsAt time.Time) (int64, error) {
 	const query = `

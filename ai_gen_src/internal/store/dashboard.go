@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"opsone/internal/domain"
 )
@@ -68,89 +67,6 @@ func (db *DB) CancelPendingRoutingPlansForScope(ctx context.Context, productCode
 	return err
 }
 
-// ListRecentRoutingRejectionScopeKeys returns scopes with a rejected routing plan within the window.
-func (db *DB) ListRecentRoutingRejectionScopeKeys(ctx context.Context, within time.Duration) (map[string]struct{}, error) {
-	since := time.Now().Add(-within)
-	rows, err := db.QueryContext(ctx, `
-		SELECT DISTINCT product_code, sku_code FROM routing_plans
-		WHERE status = 'rejected' AND created_at >= ?`, since)
-	if err != nil {
-		return nil, fmt.Errorf("list routing rejections: %w", err)
-	}
-	defer rows.Close()
-	out := make(map[string]struct{})
-	for rows.Next() {
-		var product, sku string
-		if err := rows.Scan(&product, &sku); err != nil {
-			return nil, err
-		}
-		out[MaintenanceScopeKey(product, sku)] = struct{}{}
-	}
-	return out, rows.Err()
-}
-
-// ListDismissedMaintenanceScopeKeys returns scopes dismissed by admin within 2 hours.
-func (db *DB) ListDismissedMaintenanceScopeKeys(ctx context.Context) (map[string]struct{}, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT product_code, action_detail FROM recommendations
-		WHERE action_type = 'maintenance'
-		  AND action_detail LIKE ?
-		  AND created_at >= DATE_SUB(NOW(), INTERVAL 2 HOUR)`,
-		"%DISMISSED:%")
-	if err != nil {
-		return nil, fmt.Errorf("list dismissed maintenance: %w", err)
-	}
-	defer rows.Close()
-	out := make(map[string]struct{})
-	for rows.Next() {
-		var product, detail string
-		if err := rows.Scan(&product, &detail); err != nil {
-			return nil, err
-		}
-		sku := parseSKUFromDetail(detail)
-		out[MaintenanceScopeKey(product, sku)] = struct{}{}
-	}
-	return out, rows.Err()
-}
-
-// HasRecentRoutingRejection reports a rejected routing plan for scope within the window.
-func (db *DB) HasRecentRoutingRejection(ctx context.Context, productCode, skuCode string, within time.Duration) (bool, error) {
-	since := time.Now().Add(-within)
-	var n int
-	err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM routing_plans
-		WHERE product_code = ? AND sku_code = ? AND status = 'rejected'
-		  AND created_at >= ?`,
-		productCode, skuCode, since,
-	).Scan(&n)
-	return n > 0, err
-}
-
-// HasDismissedMaintenanceSuggestion reports admin dismissed synthetic maintenance (2h).
-func (db *DB) HasDismissedMaintenanceSuggestion(ctx context.Context, productCode, skuCode string) (bool, error) {
-	var n int
-	dismissed := "%DISMISSED:%"
-	if skuCode != "" {
-		err := db.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM recommendations
-			WHERE product_code = ? AND action_type = 'maintenance'
-			  AND action_detail LIKE ?
-			  AND action_detail LIKE ?
-			  AND created_at >= DATE_SUB(NOW(), INTERVAL 2 HOUR)`,
-			productCode, dismissed, "SKU "+skuCode+"%",
-		).Scan(&n)
-		return n > 0, err
-	}
-	err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM recommendations
-		WHERE product_code = ? AND action_type = 'maintenance'
-		  AND action_detail LIKE ?
-		  AND created_at >= DATE_SUB(NOW(), INTERVAL 2 HOUR)`,
-		productCode, dismissed,
-	).Scan(&n)
-	return n > 0, err
-}
-
 // HasPendingMaintenanceRecommendation reports open maintenance suggestion for scope (24h).
 func (db *DB) HasPendingMaintenanceRecommendation(ctx context.Context, productCode, skuCode string) (bool, error) {
 	_, ok, err := db.LatestPendingMaintenanceForScope(ctx, productCode, skuCode)
@@ -177,6 +93,27 @@ func (db *DB) GetPendingRoutingPlanForScope(ctx context.Context, productCode, sk
 		return RoutingPlanRow{}, false, err
 	}
 	row.CycleID = cycleID
+	return row, true, nil
+}
+
+// GetLatestRoutingPlanForScope returns the most recent routing plan row for one scope (any status).
+func (db *DB) GetLatestRoutingPlanForScope(ctx context.Context, productCode, skuCode string) (RoutingPlanRow, bool, error) {
+	const query = `
+		SELECT id, cycle_id, product_code, scope, sku_code, plan_json, status, created_at
+		FROM routing_plans
+		WHERE product_code = ? AND sku_code = ?
+		ORDER BY id DESC
+		LIMIT 1`
+	var row RoutingPlanRow
+	err := db.QueryRowContext(ctx, query, productCode, skuCode).Scan(
+		&row.ID, &row.CycleID, &row.ProductCode, &row.Scope, &row.SKUCode, &row.PlanJSON, &row.Status, &row.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RoutingPlanRow{}, false, nil
+	}
+	if err != nil {
+		return RoutingPlanRow{}, false, err
+	}
 	return row, true, nil
 }
 

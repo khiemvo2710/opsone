@@ -56,7 +56,7 @@ export function Settings() {
       <h1>Cấu hình</h1>
       {saved && <p className="success">{saved}</p>}
       <p className="muted">
-        Ngưỡng cảnh báo và chế độ <strong>Auto</strong> (Chỉ đề xuất / Tự động / Theo khung giờ) cấu hình
+        Ngưỡng cảnh báo và chế độ <strong>Auto</strong> (Chỉ đề xuất / Tự động / Tự động theo khung giờ) cấu hình
         tại <strong>Dashboard → bảng routing</strong> — mỗi SKU một dòng.
       </p>
 

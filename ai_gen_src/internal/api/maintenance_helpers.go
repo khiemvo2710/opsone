@@ -37,6 +37,44 @@ func maintenanceTargetsFromRecommendation(rec store.PendingRecommendation, routi
 	return maintenanceTargetsForScope(rec.Detail, rec.ProviderCode, routing)
 }
 
+// maintenanceDismissedThisCycle is true when admin rejected maintenance during the current or a later completed agent cycle.
+func maintenanceDismissedThisCycle(dismissedCycle, latestCycle uint64, found bool) bool {
+	if !found || dismissedCycle == 0 || latestCycle == 0 {
+		return false
+	}
+	return dismissedCycle >= latestCycle
+}
+
+func (s *Server) maintenanceSuggestionSuppressedAfterDismiss(ctx context.Context, product, sku string, latestCycleID uint64) bool {
+	dismissedCycle, found, err := s.DB.LatestDismissedMaintenanceCycleForScope(ctx, product, sku)
+	if err != nil {
+		return false
+	}
+	return maintenanceDismissedThisCycle(dismissedCycle, latestCycleID, found)
+}
+
+func (s *Server) dismissMaintenanceSuggestion(ctx context.Context, product, sku, detail, handledBy string) error {
+	if detail == "" {
+		detail = "Đề xuất bảo trì"
+	}
+	latestCycle, _ := s.DB.LatestCompletedCycleID(ctx)
+	var cyclePtr *uint64
+	if latestCycle > 0 {
+		cyclePtr = &latestCycle
+	}
+	incID, _ := s.DB.FindOpenIncidentForScope(ctx, product, sku, nil)
+	var incPtr *string
+	if incID != "" {
+		incPtr = &incID
+		_ = s.DB.UpdateIncidentHandled(ctx, incID, store.IncidentHandleUpdate{
+			Status:           "acknowledged",
+			HandledBy:        handledBy,
+			ResolutionAction: "admin_reject",
+		})
+	}
+	return s.DB.InsertRecommendation(ctx, cyclePtr, incPtr, product, sku, "maintenance", "DISMISSED: "+detail)
+}
+
 func pendingMaintenanceToMap(rec store.PendingRecommendation) map[string]any {
 	if rec.ID == 0 || strings.Contains(rec.Detail, "DISMISSED:") {
 		return nil

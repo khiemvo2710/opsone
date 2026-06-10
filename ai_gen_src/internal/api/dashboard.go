@@ -1,10 +1,12 @@
 package api
 
 import (
+	"encoding/json"
 	"math"
 	"net/http"
 	"time"
 
+	"opsone/internal/agent"
 	"opsone/internal/store"
 )
 
@@ -54,14 +56,17 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 	scopeAutoByKey, _ := s.DB.ListScopeAutoConfig(ctx)
 
 	scopes := map[scopeKey]map[string]float64{}
+	baselines := map[scopeKey]map[string]float64{}
 	scopeOrder := make([]scopeKey, 0)
 	for _, row := range routing {
 		k := scopeKey{product: row.ProductCode, sku: row.SKUCode}
 		if scopes[k] == nil {
 			scopes[k] = make(map[string]float64)
+			baselines[k] = make(map[string]float64)
 			scopeOrder = append(scopeOrder, k)
 		}
 		scopes[k][row.ProviderCode] = roundPct(row.TrafficPct)
+		baselines[k][row.ProviderCode] = roundPct(row.BaselinePct)
 	}
 
 	outRows := make([]map[string]any, 0, len(scopeOrder))
@@ -86,6 +91,7 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 			"sku_code":         k.sku,
 			"health_status":    snap.Health,
 			"routing_pct":      scopes[k],
+			"baseline_pct":     baselines[k],
 			"provider_metrics": snap.ProviderMetrics,
 		}
 		if snap.LiveMetrics != nil {
@@ -119,36 +125,97 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 		if snap.ShouldAct && hasTh {
 			livePlan, liveMaint = s.scopeSuggestionFromSnapshot(ctx, caches, k.product, k.sku, snap, maintainedProviders)
 			maintWarranted = maintenanceWarrantedFromSnapshot(snap, k.sku, scopes[k], maintainedProviders, th)
+			if maintWarranted {
+				livePlan = nil
+				if hasPendingPlan {
+					_ = s.DB.CancelPendingRoutingPlansForScope(ctx, k.product, k.sku)
+					hasPendingPlan = false
+				}
+			}
 		}
-		if caches.maintDismissed(k.product, k.sku) {
-			liveMaint = nil
-			dbMaint = nil
-			maintWarranted = false
-		}
-
 		inActiveMaint := item["maintenance"] != nil
-		routingRejected := caches.isRoutingRejected(k.product, k.sku)
-		if !inActiveMaint && !routingRejected && hasTh && hasPendingPlan && livePlan == nil && snap.AnyBreached {
+		if !inActiveMaint && hasTh && hasPendingPlan && livePlan == nil && snap.AnyBreached && !maintWarranted {
 			livePlan = s.refreshPendingRoutingFromSnapshot(ctx, caches, k.product, k.sku, snap, maintainedProviders)
 		}
-		if !inActiveMaint && !routingRejected && hasPendingPlan && !snap.AnyBreached && !snap.ShouldAct {
+		if !inActiveMaint && hasPendingPlan && !snap.AnyBreached && !snap.ShouldAct {
 			_ = s.DB.CancelPendingRoutingPlansForScope(ctx, k.product, k.sku)
 			hasPendingPlan = false
 		}
 
-		switch {
-		case !inActiveMaint && maintWarranted && liveMaint != nil:
-			liveMaint["reason"] = liveMaintenanceReason(k.product, k.sku, snap, liveMaint, th)
-			item["pending_maintenance"] = liveMaint
-		case !inActiveMaint && maintWarranted && dbMaint != nil:
-			dbMaint["reason"] = liveMaintenanceReason(k.product, k.sku, snap, dbMaint, th)
-			item["pending_maintenance"] = dbMaint
-		case livePlan != nil && !inActiveMaint:
-			item["pending_plan"] = livePlan
-		default:
-			if !routingRejected && hasPendingPlan {
-				if plan, ok := planByScope[k]; ok {
-					item["pending_plan"] = routingPlanJSON(plan)
+		if !inActiveMaint && hasTh {
+			if pm, ok := s.prioritizeMaintenanceSuggestion(ctx, caches, k.product, k.sku, snap, maintainedProviders, liveMaint); ok {
+				liveMaint = pm
+				livePlan = nil
+				maintWarranted = true
+				hasPendingPlan = false
+			}
+		}
+
+		scopeAuto := store.ScopeAutoConfig{
+			ProductCode: k.product,
+			SKUCode:     k.sku,
+			AutoAction:  "recommend_only",
+		}
+		if ac, ok := scopeAutoByKey[k.maintKey()]; ok {
+			scopeAuto = ac
+		}
+		manualApproval := !store.ShouldAutoApplyScope(scopeAuto, now)
+
+		if !manualApproval && hasTh && !inActiveMaint && snap.AnyBreached {
+			inGrace := s.inReopenRecoveryGrace(ctx, k.product, k.sku, caches.latestCycleID)
+			for pass := 0; pass < 2; pass++ {
+				if !scopeAutoApplyAllowed(snap, k.sku, scopes[k], maintainedProviders, th) {
+					break
+				}
+				applied, err := s.autoApplyScopeFromSnapshot(ctx, caches, k.product, k.sku, snap, maintainedProviders, inGrace)
+				if err != nil || !applied {
+					break
+				}
+				if rows, err := s.DB.GetRoutingForScope(ctx, k.product, k.sku); err == nil {
+					updated := make(map[string]float64, len(rows))
+					for _, row := range rows {
+						updated[row.ProviderCode] = roundPct(row.TrafficPct)
+					}
+					scopes[k] = updated
+					item["routing_pct"] = updated
+				}
+				hasPendingPlan = false
+				livePlan = nil
+				liveMaint = nil
+				maintWarranted = false
+				if mws, ok := maintByScope[k]; ok {
+					maintainedProviders = maintainedActiveProviders(mws, scopes[k], now)
+					if maint := maintenanceOverview(mws, scopes[k], k.sku, now); maint != nil {
+						item["maintenance"] = maint
+						inActiveMaint = true
+						break
+					}
+				}
+				snap = s.buildScopeSnapshot(ctx, caches, k.product, k.sku, scopes[k], maintainedProviders)
+				item["health_status"] = snap.Health
+				item["provider_metrics"] = snap.ProviderMetrics
+			}
+		}
+
+		if manualApproval {
+			switch {
+			case !inActiveMaint && maintWarranted && liveMaint != nil:
+				liveMaint["reason"] = liveMaintenanceReason(k.product, k.sku, snap, liveMaint, th)
+				item["pending_maintenance"] = liveMaint
+			case !inActiveMaint && maintWarranted && dbMaint != nil:
+				dbMaint["reason"] = liveMaintenanceReason(k.product, k.sku, snap, dbMaint, th)
+				item["pending_maintenance"] = dbMaint
+			case livePlan != nil && !inActiveMaint:
+				item["pending_plan"] = livePlan
+			default:
+				if hasPendingPlan && !maintWarranted {
+					if plan, ok := planByScope[k]; ok {
+						var planJSON agent.RoutingPlanJSON
+						if err := json.Unmarshal(plan.PlanJSON, &planJSON); err != nil ||
+							!s.routingProposalSuppressedAfterReject(ctx, k.product, k.sku, planJSON) {
+							item["pending_plan"] = routingPlanJSON(plan)
+						}
+					}
 				}
 			}
 		}

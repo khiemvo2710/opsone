@@ -2,9 +2,7 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"opsone/internal/domain"
@@ -146,49 +144,6 @@ func (db *DB) ApplyRoutingSnapshot(ctx context.Context, snap RoutingSnapshot, up
 		}
 	}
 	return tx.Commit()
-}
-
-// LatestAppliedChange is the newest applied routing change for scope (LIFO).
-type LatestAppliedChange struct {
-	ID            uint64
-	RoutingBefore RoutingSnapshot
-	RoutingAfter  RoutingSnapshot
-}
-
-// GetLatestAppliedRoutingChange for rollback LIFO (§8.7).
-func (db *DB) GetLatestAppliedRoutingChange(ctx context.Context, product, scope, sku string) (LatestAppliedChange, bool, error) {
-	const query = `
-		SELECT id, routing_before, routing_after
-		FROM agent_change_log
-		WHERE product_code = ? AND scope = ? AND sku_code = ?
-		  AND change_type = 'routing' AND change_status = 'applied'
-		ORDER BY created_at DESC
-		LIMIT 1`
-	var id uint64
-	var beforeRaw, afterRaw []byte
-	err := db.QueryRowContext(ctx, query, product, scope, sku).Scan(&id, &beforeRaw, &afterRaw)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return LatestAppliedChange{}, false, nil
-		}
-		return LatestAppliedChange{}, false, err
-	}
-	var before, after RoutingSnapshot
-	if err := json.Unmarshal(beforeRaw, &before); err != nil {
-		return LatestAppliedChange{}, false, err
-	}
-	if err := json.Unmarshal(afterRaw, &after); err != nil {
-		return LatestAppliedChange{}, false, err
-	}
-	return LatestAppliedChange{ID: id, RoutingBefore: before, RoutingAfter: after}, true, nil
-}
-
-// MarkChangeRolledBack updates change_status.
-func (db *DB) MarkChangeRolledBack(ctx context.Context, id uint64, by string) error {
-	_, err := db.ExecContext(ctx, `
-		UPDATE agent_change_log SET change_status='rolled_back', rolled_back_at=NOW(), rolled_back_by=?
-		WHERE id = ?`, by, id)
-	return err
 }
 
 // GetAllRoutingForProduct returns all routing rows for product (all SKUs).

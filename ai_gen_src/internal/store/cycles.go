@@ -13,9 +13,10 @@ type AnalysisHistoryRow struct {
 	ServiceType  string
 	SKUCode      string
 	ProviderCode string
-	SuccessRate  float64
-	PendingRate  float64
-	FailRate     float64
+	SuccessRate       float64
+	PendingRate       float64
+	FailRate          float64
+	TotalTransactions uint
 }
 
 // StartAnalysisCycle inserts agent_analysis_cycles with status running.
@@ -71,12 +72,12 @@ func (db *DB) InsertAnalysisHistory(ctx context.Context, cycleID uint64, rows []
 	const query = `
 		INSERT INTO agent_analysis_history (
 			cycle_id, recorded_at, product_code, service_type,
-			sku_code, provider_code, success_rate, pending_rate, fail_rate
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			sku_code, provider_code, success_rate, pending_rate, fail_rate, total_transactions
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	for _, r := range rows {
 		_, err := db.ExecContext(ctx, query,
 			cycleID, r.RecordedAt, r.ProductCode, r.ServiceType,
-			r.SKUCode, r.ProviderCode, r.SuccessRate, r.PendingRate, r.FailRate,
+			r.SKUCode, r.ProviderCode, r.SuccessRate, r.PendingRate, r.FailRate, r.TotalTransactions,
 		)
 		if err != nil {
 			return fmt.Errorf("insert analysis history: %w", err)

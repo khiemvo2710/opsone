@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { Incident, IncidentsListResponse } from '../types/api';
-import { incidentStatusLabel, incidentResolutionLabel, formatHandledBy, formatHandledAt } from '../utils/incidentStatus';
+import { incidentStatusLabel, incidentResolutionLabel, formatHandledBy } from '../utils/incidentStatus';
 import { HealthBadge } from './HealthBadge';
 
 const SEVERITY_STATUS: Record<string, string> = {
@@ -15,9 +14,20 @@ const SEVERITY_STATUS: Record<string, string> = {
 
 const DEFAULT_PAGE_SIZE = 10;
 
-function trunc(text: string, max = 56): string {
-  if (text.length <= max) return text;
-  return `${text.slice(0, max)}…`;
+function formatIncidentTime(iso: string): string {
+  return new Date(iso).toLocaleString('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatHandledCell(inc: Incident): string {
+  const by = formatHandledBy(inc.handled_by, inc.resolution_action);
+  if (inc.status === 'open' || !inc.handled_at) return by;
+  return `${by} · ${formatIncidentTime(inc.handled_at)}`;
 }
 
 interface Props {
@@ -55,27 +65,25 @@ export function IncidentsTable({ paginated = false, pageSize = DEFAULT_PAGE_SIZE
             <col className="incidents-table__col-sku" />
             <col className="incidents-table__col-summary" />
             <col className="incidents-table__col-status" />
-            <col className="incidents-table__col-handler" />
             <col className="incidents-table__col-handled" />
           </colgroup>
           <thead>
             <tr>
               <th>Thời gian</th>
               <th>Mã</th>
-              <th>Mức độ</th>
+              <th>Mức</th>
               <th>Sản phẩm</th>
               <th>Provider</th>
               <th>SKU</th>
               <th>Tóm tắt</th>
               <th>TT</th>
-              <th>Người xử lý</th>
-              <th>Thời gian xử lý</th>
+              <th>Xử lý</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && paginated ? (
               <tr>
-                <td colSpan={10} className="muted">
+                <td colSpan={9} className="muted">
                   Đang tải…
                 </td>
               </tr>
@@ -83,13 +91,9 @@ export function IncidentsTable({ paginated = false, pageSize = DEFAULT_PAGE_SIZE
               items.map((inc) => (
                 <tr key={inc.id}>
                   <td className="incidents-table__time">
-                    {new Date(inc.created_at).toLocaleString('vi-VN')}
+                    {formatIncidentTime(inc.created_at)}
                   </td>
-                  <td className="mono incidents-table__id">
-                    <Link to={`/incidents/${inc.incident_id}`} className="table-link incidents-table__id-link">
-                      #{inc.incident_id}
-                    </Link>
-                  </td>
+                  <td className="mono incidents-table__id">#{inc.incident_id}</td>
                   <td>
                     <HealthBadge
                       status={SEVERITY_STATUS[inc.severity] ?? 'yellow'}
@@ -101,23 +105,19 @@ export function IncidentsTable({ paginated = false, pageSize = DEFAULT_PAGE_SIZE
                   <td>{inc.product_code}</td>
                   <td>{inc.provider_code || '—'}</td>
                   <td>{inc.sku_code || '—'}</td>
-                  <td className="incidents-table__summary" title={inc.summary}>
-                    {inc.summary ? trunc(inc.summary) : '—'}
+                  <td className="incidents-table__summary">{inc.summary || '—'}</td>
+                  <td className="incidents-table__status">
+                    <span className="incidents-table__status-line">
+                      <span className={`badge badge--${inc.status}`}>{incidentStatusLabel(inc.status)}</span>
+                      {inc.resolution_action && inc.status !== 'open' && (
+                        <span className="incidents-table__action muted" title="Hành động">
+                          {' '}
+                          · {incidentResolutionLabel(inc.resolution_action)}
+                        </span>
+                      )}
+                    </span>
                   </td>
-                  <td>
-                    <span className={`badge badge--${inc.status}`}>{incidentStatusLabel(inc.status)}</span>
-                    {inc.resolution_action && inc.status !== 'open' && (
-                      <span className="incidents-table__action muted" title="Hành động">
-                        {incidentResolutionLabel(inc.resolution_action)}
-                      </span>
-                    )}
-                  </td>
-                  <td className="incidents-table__handled-by">
-                    {formatHandledBy(inc.handled_by, inc.resolution_action)}
-                  </td>
-                  <td className="incidents-table__handled-at">
-                    {formatHandledAt(inc.handled_at, inc.status)}
-                  </td>
+                  <td className="incidents-table__handled">{formatHandledCell(inc)}</td>
                 </tr>
               ))
             )}

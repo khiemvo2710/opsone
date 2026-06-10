@@ -228,56 +228,6 @@ func scanRoutingPlans(rows *sql.Rows) ([]RoutingPlanRow, error) {
 	return out, rows.Err()
 }
 
-// AgentChangeListItem for API list.
-type AgentChangeListItem struct {
-	ID            uint64
-	ProductCode   string
-	Scope         string
-	SKUCode       string
-	TriggerType   string
-	ChangeStatus  string
-	RoutingBefore json.RawMessage
-	RoutingAfter  json.RawMessage
-	CreatedAt     time.Time
-}
-
-// ListAgentChanges with optional filters.
-func (db *DB) ListAgentChanges(ctx context.Context, product, status string, limit int) ([]AgentChangeListItem, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	query := `
-		SELECT id, product_code, scope, sku_code, trigger_type, change_status, routing_before, routing_after, created_at
-		FROM agent_change_log WHERE 1=1`
-	var args []any
-	if product != "" {
-		query += ` AND product_code = ?`
-		args = append(args, product)
-	}
-	if status != "" {
-		query += ` AND change_status = ?`
-		args = append(args, status)
-	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
-	args = append(args, limit)
-
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []AgentChangeListItem
-	for rows.Next() {
-		var r AgentChangeListItem
-		if err := rows.Scan(&r.ID, &r.ProductCode, &r.Scope, &r.SKUCode, &r.TriggerType, &r.ChangeStatus,
-			&r.RoutingBefore, &r.RoutingAfter, &r.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
 // NotificationRow list item.
 type NotificationRow struct {
 	ID          uint64

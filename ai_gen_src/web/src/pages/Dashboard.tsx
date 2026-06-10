@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { useToast } from '../context/ToastContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiClientError } from '../api/client';
+import { routingPctMapsEqual } from '../components/RoutingPctEditor';
+import { scopeDisplayLabel } from '../utils/dashboardRowOrder';
 import type {
   DashboardOverview,
   DashboardOverviewRow,
@@ -16,14 +18,15 @@ import {
   type ApproveRoutingPayload,
   type MaintenanceApprovePayload,
   type ScopeMaintenancePayload,
-  type ScopeRoutingApplyPayload,
   type ScopeRoutingPayload,
+  type ScopeRoutingApplyPayload,
 } from '../components/ServiceOverviewTable';
 import type {
   ExtendMaintenancePayload,
   ScopeMaintenanceActionPayload,
 } from '../components/ActiveMaintenanceCell';
 import { useOverallHealth } from '../hooks/useOverallHealth';
+import { RedSkuScrollNav } from '../components/RedSkuScrollNav';
 import {
   effectiveRowHealth,
   rowPendingApprove,
@@ -76,6 +79,8 @@ function tabMetaMap(
   return out;
 }
 
+const ROUTING_PROVIDERS = ['ESALE', 'IMEDIA', 'SHOPPAY'] as const;
+
 function removePendingPlan(data: DashboardOverview | undefined, planId: number): DashboardOverview | undefined {
   if (!data?.rows) return data;
   return {
@@ -127,7 +132,7 @@ export function Dashboard() {
   const [planActions, setPlanActions] = useState<Record<number, PlanAction>>({});
   const [maintActions, setMaintActions] = useState<Record<number, PlanAction>>({});
   const [scopeDone, setScopeDone] = useState<
-    Record<string, { planId: number; action: PlanAction }>
+    Record<string, { planId: number; action: PlanAction; rejectedRouting?: Record<string, number> }>
   >({});
   const [maintScopeDone, setMaintScopeDone] = useState<
     Record<string, { maintId: number; action: PlanAction }>
@@ -164,6 +169,22 @@ export function Dashboard() {
   const thresholdsByProduct = useProductThresholds(productCodes, overview?.thresholds);
 
   const filteredRows = rowsByService[serviceTab] ?? [];
+  const overviewRows = () =>
+    qc.getQueryData<DashboardOverview>(['dashboard-overview'])?.rows ?? overview?.rows;
+  const scopeDisplayName = (productCode: string, skuCode: string) =>
+    scopeDisplayLabel(overviewRows(), productCode, skuCode);
+  const scopeNameByMaintId = (maintId: number) => {
+    const row = overviewRows()?.find((r) => r.pending_maintenance?.id === maintId);
+    return row
+      ? scopeDisplayLabel(overviewRows(), row.product_code, row.sku_code)
+      : `#${maintId}`;
+  };
+  const scopeNameByPlanId = (planId: number) => {
+    const row = overviewRows()?.find((r) => r.pending_plan?.id === planId);
+    return row
+      ? scopeDisplayLabel(overviewRows(), row.product_code, row.sku_code)
+      : `#${planId}`;
+  };
   const serviceTabMeta = useMemo(
     () => tabMetaMap(rowsByService, thresholdsByProduct),
     [rowsByService, thresholdsByProduct],
@@ -226,7 +247,7 @@ export function Dashboard() {
       setBusyPlanId(planId);
     },
     onSuccess: async (_, { planId }) => {
-      showToast('ok', `Đã duyệt kế hoạch routing #${planId} — routing đã áp dụng.`);
+      showToast('ok', `Đã duyệt kế hoạch routing ${scopeNameByPlanId(planId)} — routing đã áp dụng.`);
       await refreshOverview(planId, 'approved');
       setBusyPlanId(null);
     },
@@ -250,25 +271,19 @@ export function Dashboard() {
     await qc.refetchQueries({ queryKey: ['dashboard-overview'] });
     void qc.invalidateQueries({ queryKey: ['health-status'] });
     void qc.invalidateQueries({ queryKey: ['maintenance'] });
+    void qc.invalidateQueries({ queryKey: ['incidents'] });
 
     const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
     const scopeKey = row ? `${row.product_code}:${row.sku_code}` : '';
     if (scopeKey) {
       const freshRow = fresh?.rows?.find((r) => `${r.product_code}:${r.sku_code}` === scopeKey);
-      const resolved =
-        action === 'approved'
-          ? Boolean(freshRow?.maintenance) || !freshRow?.pending_maintenance
-          : action === 'rejected' && !freshRow?.pending_maintenance;
-      if (resolved) {
-        setMaintScopeDone((prev) => {
-          const next = { ...prev };
-          delete next[scopeKey];
-          return next;
-        });
-        if (action === 'rejected') {
-          setMaintActions((prev) => {
+      if (action === 'approved') {
+        const resolved =
+          Boolean(freshRow?.maintenance) || !freshRow?.pending_maintenance;
+        if (resolved) {
+          setMaintScopeDone((prev) => {
             const next = { ...prev };
-            delete next[maintId];
+            delete next[scopeKey];
             return next;
           });
         }
@@ -289,7 +304,7 @@ export function Dashboard() {
       setBusyMaintId(payload.recommendationId);
     },
     onSuccess: async (_, payload) => {
-      showToast('ok', `Đã duyệt bảo trì #${payload.recommendationId} — cửa sổ bảo trì đã kích hoạt.`);
+      showToast('ok', `Đã duyệt bảo trì ${scopeNameByMaintId(payload.recommendationId)} — cửa sổ bảo trì đã kích hoạt.`);
       await refreshMaintenanceOverview(payload.recommendationId, 'approved');
       setBusyMaintId(null);
     },
@@ -305,7 +320,7 @@ export function Dashboard() {
       setBusyMaintId(id);
     },
     onSuccess: async (_, id) => {
-      showToast('ok', `Đã từ chối đề xuất bảo trì #${id}.`);
+      showToast('ok', `Đã từ chối đề xuất bảo trì ${scopeNameByMaintId(id)}.`);
       await refreshMaintenanceOverview(id, 'rejected');
       setBusyMaintId(null);
     },
@@ -321,9 +336,14 @@ export function Dashboard() {
     planId?: number,
   ) => {
     const scopeKey = `${payload.productCode}:${payload.skuCode}`;
+    const rejectedRouting = payload.routing ?? payload.plan?.proposed_pct ?? {};
     setScopeDone((prev) => ({
       ...prev,
-      [scopeKey]: { planId: planId ?? 0, action },
+      [scopeKey]: {
+        planId: planId ?? 0,
+        action,
+        ...(action === 'rejected' ? { rejectedRouting } : {}),
+      },
     }));
     qc.setQueryData<DashboardOverview>(['dashboard-overview'], (old) =>
       removeScopePending(old, payload.productCode, payload.skuCode, 'routing'),
@@ -333,15 +353,34 @@ export function Dashboard() {
     void qc.invalidateQueries({ queryKey: ['routing-plans'] });
     void qc.invalidateQueries({ queryKey: ['incidents'] });
 
-    if (action === 'rejected') {
-      const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
-      if (!fresh?.rows?.find((r) => r.product_code === payload.productCode && r.sku_code === payload.skuCode)?.pending_plan) {
+    const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
+    const freshRow = fresh?.rows?.find(
+      (r) => r.product_code === payload.productCode && r.sku_code === payload.skuCode,
+    );
+    if (action === 'rejected' && !freshRow?.pending_plan) {
+      setScopeDone((prev) => {
+        const next = { ...prev };
+        delete next[scopeKey];
+        return next;
+      });
+    } else if (action === 'rejected' && freshRow?.pending_plan) {
+      const proposed = freshRow.pending_plan.plan?.proposed_pct;
+      if (
+        !proposed ||
+        !routingPctMapsEqual(proposed, rejectedRouting, ROUTING_PROVIDERS)
+      ) {
         setScopeDone((prev) => {
           const next = { ...prev };
           delete next[scopeKey];
           return next;
         });
       }
+    } else if (action === 'approved') {
+      setScopeDone((prev) => {
+        const next = { ...prev };
+        delete next[scopeKey];
+        return next;
+      });
     }
   };
 
@@ -357,21 +396,21 @@ export function Dashboard() {
     await qc.refetchQueries({ queryKey: ['dashboard-overview'] });
     void qc.invalidateQueries({ queryKey: ['health-status'] });
     void qc.invalidateQueries({ queryKey: ['maintenance'] });
+    void qc.invalidateQueries({ queryKey: ['incidents'] });
 
     const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
     const freshRow = fresh?.rows?.find(
       (r) => r.product_code === payload.productCode && r.sku_code === payload.skuCode,
     );
-    const resolved =
-      action === 'approved'
-        ? Boolean(freshRow?.maintenance) || !freshRow?.pending_maintenance
-        : action === 'rejected' && !freshRow?.pending_maintenance;
-    if (resolved) {
-      setMaintScopeDone((prev) => {
-        const next = { ...prev };
-        delete next[scopeKey];
-        return next;
-      });
+    if (action === 'approved') {
+      const resolved = Boolean(freshRow?.maintenance) || !freshRow?.pending_maintenance;
+      if (resolved) {
+        setMaintScopeDone((prev) => {
+          const next = { ...prev };
+          delete next[scopeKey];
+          return next;
+        });
+      }
     }
   };
 
@@ -389,7 +428,7 @@ export function Dashboard() {
     },
     onSuccess: async (res, payload) => {
       const planId = (res as { plan_id?: number })?.plan_id;
-      showToast('ok', `Đã duyệt đề xuất routing ${payload.productCode}/${payload.skuCode} — routing đã áp dụng.`);
+      showToast('ok', `Đã duyệt đề xuất routing ${scopeDisplayName(payload.productCode, payload.skuCode)} — routing đã áp dụng.`);
       await refreshScopeRouting(payload, 'approved', planId);
       setBusyScopeKey(null);
     },
@@ -403,13 +442,18 @@ export function Dashboard() {
     mutationFn: (payload: ScopeRoutingPayload) =>
       api(`/scopes/${payload.productCode}/${payload.skuCode}/routing/reject`, {
         method: 'POST',
-        body: JSON.stringify({ plan: payload.plan }),
+        body: JSON.stringify({
+          plan: {
+            ...payload.plan,
+            proposed_pct: payload.routing,
+          },
+        }),
       }),
     onMutate: (payload) => {
       setBusyScopeKey(`${payload.productCode}:${payload.skuCode}`);
     },
     onSuccess: async (_, payload) => {
-      showToast('ok', `Đã từ chối đề xuất routing ${payload.productCode}/${payload.skuCode}.`);
+      showToast('ok', `Đã từ chối đề xuất routing ${scopeDisplayName(payload.productCode, payload.skuCode)}.`);
       await refreshScopeRouting(payload, 'rejected');
       setBusyScopeKey(null);
     },
@@ -429,14 +473,37 @@ export function Dashboard() {
       setBusyScopeKey(`${payload.productCode}:${payload.skuCode}`);
     },
     onSuccess: async (_, payload) => {
-      showToast('ok', `Đã cập nhật routing ${payload.productCode}/${payload.skuCode}.`);
-      void qc.refetchQueries({ queryKey: ['dashboard-overview'] });
+      showToast('ok', `Đã cập nhật routing ${scopeDisplayName(payload.productCode, payload.skuCode)}.`);
+      await qc.refetchQueries({ queryKey: ['dashboard-overview'] });
       void qc.invalidateQueries({ queryKey: ['health-status'] });
-      void qc.invalidateQueries({ queryKey: ['agent-changes'] });
       setBusyScopeKey(null);
     },
     onError: (e) => {
       showToast('err', e instanceof ApiClientError ? e.message : 'Cập nhật routing thất bại');
+      setBusyScopeKey(null);
+    },
+  });
+
+  const restoreScopeBaseline = useMutation({
+    mutationFn: (payload: { productCode: string; skuCode: string }) =>
+      api<{ applied: boolean }>(
+        `/scopes/${payload.productCode}/${payload.skuCode}/routing/restore-baseline`,
+        { method: 'POST', body: JSON.stringify({}) },
+      ),
+    onMutate: (payload) => {
+      setBusyScopeKey(`${payload.productCode}:${payload.skuCode}`);
+    },
+    onSuccess: async (_, payload) => {
+      showToast(
+        'ok',
+        `Đã mở lại provider ${scopeDisplayName(payload.productCode, payload.skuCode)} — routing về baseline; auto chờ chu kỳ Agent tiếp theo.`,
+      );
+      await qc.refetchQueries({ queryKey: ['dashboard-overview'] });
+      void qc.invalidateQueries({ queryKey: ['health-status'] });
+      setBusyScopeKey(null);
+    },
+    onError: (e) => {
+      showToast('err', e instanceof ApiClientError ? e.message : 'Mở lại provider thất bại');
       setBusyScopeKey(null);
     },
   });
@@ -456,7 +523,7 @@ export function Dashboard() {
       setBusyScopeKey(`${payload.productCode}:${payload.skuCode}`);
     },
     onSuccess: async (_, payload) => {
-      showToast('ok', `Đã duyệt bảo trì ${payload.productCode}/${payload.skuCode} — cửa sổ bảo trì đã kích hoạt.`);
+      showToast('ok', `Đã duyệt bảo trì ${scopeDisplayName(payload.productCode, payload.skuCode)} — cửa sổ bảo trì đã kích hoạt.`);
       await refreshScopeMaintenance(payload, 'approved');
       setBusyScopeKey(null);
     },
@@ -468,18 +535,25 @@ export function Dashboard() {
 
   const reopenMaintenance = useMutation({
     mutationFn: (payload: ScopeMaintenanceActionPayload) =>
-      api(`/scopes/${payload.productCode}/${payload.skuCode}/maintenance/cancel`, {
-        method: 'POST',
-        body: JSON.stringify({
-          maintenance_ids: payload.maintenanceIds ?? [],
-        }),
-      }),
+      api<{ applied: boolean; proposed_pct?: Record<string, number> }>(
+        `/scopes/${payload.productCode}/${payload.skuCode}/maintenance/reopen-service`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            maintenance_ids: payload.maintenanceIds ?? [],
+          }),
+        },
+      ),
     onMutate: (payload) => {
       setBusyScopeKey(`${payload.productCode}:${payload.skuCode}`);
     },
     onSuccess: async (_, payload) => {
-      showToast('ok', `Đã mở lại dịch vụ ${payload.productCode}/${payload.skuCode}.`);
-      await qc.invalidateQueries({ queryKey: ['dashboard-overview'] });
+      showToast(
+        'ok',
+        `Đã mở lại dịch vụ ${scopeDisplayName(payload.productCode, payload.skuCode)} — routing về baseline; auto chờ chu kỳ Agent tiếp theo.`,
+      );
+      await qc.refetchQueries({ queryKey: ['dashboard-overview'] });
+      void qc.invalidateQueries({ queryKey: ['health-status'] });
       void qc.invalidateQueries({ queryKey: ['maintenance'] });
       setBusyScopeKey(null);
     },
@@ -502,7 +576,7 @@ export function Dashboard() {
       setBusyScopeKey(`${payload.productCode}:${payload.skuCode}`);
     },
     onSuccess: async (_, payload) => {
-      showToast('ok', `Đã cập nhật thời gian bảo trì ${payload.productCode}/${payload.skuCode}.`);
+      showToast('ok', `Đã cập nhật thời gian bảo trì ${scopeDisplayName(payload.productCode, payload.skuCode)}.`);
       await qc.invalidateQueries({ queryKey: ['dashboard-overview'] });
       void qc.invalidateQueries({ queryKey: ['maintenance'] });
       setBusyScopeKey(null);
@@ -523,7 +597,7 @@ export function Dashboard() {
       setBusyScopeKey(`${payload.productCode}:${payload.skuCode}`);
     },
     onSuccess: async (_, payload) => {
-      showToast('ok', `Đã từ chối đề xuất bảo trì ${payload.productCode}/${payload.skuCode}.`);
+      showToast('ok', `Đã từ chối đề xuất bảo trì ${scopeDisplayName(payload.productCode, payload.skuCode)}.`);
       await refreshScopeMaintenance(payload, 'rejected');
       setBusyScopeKey(null);
     },
@@ -539,7 +613,7 @@ export function Dashboard() {
       setBusyPlanId(id);
     },
     onSuccess: async (_, id) => {
-      showToast('ok', `Đã từ chối kế hoạch routing #${id}.`);
+      showToast('ok', `Đã từ chối kế hoạch routing ${scopeNameByPlanId(id)}.`);
       await refreshOverview(id, 'rejected');
       setBusyPlanId(null);
     },
@@ -559,9 +633,8 @@ export function Dashboard() {
         </div>
       </section>
 
-      <section className="page__section">
-        <div className="section-head">
-          <h2>Tổng quan routing & bảo trì</h2>
+      <section className="page__section page__section--routing">
+        <div className="section-head section-head--dashboard">
           <nav className="service-tabs" aria-label="Loai dich vu">
             {SERVICE_TABS.map((tab) => {
               const count = rowsByService[tab.id]?.length ?? 0;
@@ -585,7 +658,16 @@ export function Dashboard() {
               );
             })}
           </nav>
+          <div className="section-head__aside">
+            {overview?.updated_at && (
+              <p className="section-head__meta muted">
+                Cập nhật: {new Date(overview.updated_at).toLocaleString('vi-VN')} · tự làm mới mỗi 60 giây
+                {overviewFetching && !overviewLoading ? ' · đang cập nhật…' : ''}
+              </p>
+            )}
+          </div>
         </div>
+        <RedSkuScrollNav rows={filteredRows} thresholdsByProduct={thresholdsByProduct} />
         {overviewLoading ? (
           <p className="loading">Đang tải bảng routing…</p>
         ) : (
@@ -594,7 +676,6 @@ export function Dashboard() {
             providers={overview?.providers}
             thresholdsByProduct={thresholdsByProduct}
             updatedAt={overview?.updated_at}
-            refreshing={overviewFetching && !overviewLoading}
             busyPlanId={busyPlanId}
             busyMaintId={busyMaintId}
             busyScopeKey={busyScopeKey}
@@ -606,6 +687,7 @@ export function Dashboard() {
             onReject={(id) => reject.mutate(id)}
             onApproveScope={(payload) => approveScope.mutate(payload)}
             onRejectScope={(payload) => rejectScope.mutate(payload)}
+            onRestoreProviderRouting={(payload) => restoreScopeBaseline.mutate(payload)}
             onApplyScopeRouting={(payload) => applyScopeRouting.mutate(payload)}
             onApproveMaintenance={(payload) => approveMaintenance.mutate(payload)}
             onRejectMaintenance={(id) => rejectMaintenance.mutate(id)}

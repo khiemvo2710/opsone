@@ -86,6 +86,58 @@ func findScope(pc ProductContext, sku, provider string) ScopeContext {
 	return ScopeContext{SKUCode: sku, ProviderCode: provider}
 }
 
+// ActiveRoutingCount is the number of providers with routing_pct > 0 that are not in maintenance.
+func ActiveRoutingCount(pc ProductContext, sku string, routing map[string]float64) int {
+	maintained := maintainedProvidersForPC(pc)
+	n := 0
+	for provider, pct := range routing {
+		if pct <= 0 || maintained[provider] {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// ShouldForceAutoRouting is true when ≥2 routable providers are active, at least one is healthy,
+// and SKURoutingDecision is routing — có thể shift ngay, bỏ qua gate chu kỳ (§9.5.2 auto/time_window).
+func ShouldForceAutoRouting(pc ProductContext, sku string, routing map[string]float64, th store.ProductThreshold) bool {
+	if ActiveRoutingCount(pc, sku, routing) < 2 {
+		return false
+	}
+	kind, _ := SKURoutingDecision(pc, sku, routing, th)
+	return kind == "routing"
+}
+
+// ShouldForceAutoMaintenanceAllProviders is true when ≥2 routable providers are active and all breach
+// thresholds — không còn provider khỏe để shift; bỏ qua gate chu kỳ liên tiếp (§9.5.2).
+func ShouldForceAutoMaintenanceAllProviders(pc ProductContext, sku string, routing map[string]float64, th store.ProductThreshold) bool {
+	if ActiveRoutingCount(pc, sku, routing) < 2 {
+		return false
+	}
+	kind, _ := SKURoutingDecision(pc, sku, routing, th)
+	return kind == "maintenance"
+}
+
+// ShouldForceAutoMaintenance is true when only one routable provider remains and it breaches thresholds.
+// Không còn provider khác để chuyển traffic — bỏ qua gate chu kỳ liên tiếp (§9.5.2).
+func ShouldForceAutoMaintenance(pc ProductContext, sku string, routing map[string]float64, th store.ProductThreshold) bool {
+	if ActiveRoutingCount(pc, sku, routing) != 1 {
+		return false
+	}
+	maintained := maintainedProvidersForPC(pc)
+	for provider, pct := range routing {
+		if pct <= 0 || maintained[provider] {
+			continue
+		}
+		sc := findScope(pc, sku, provider)
+		if scopeMetricsBreached(sc, th) {
+			return true
+		}
+	}
+	return false
+}
+
 func breachedProvidersForSKU(pc ProductContext, sku string, th store.ProductThreshold) map[string]bool {
 	out := make(map[string]bool)
 	for _, sc := range pc.Scopes {

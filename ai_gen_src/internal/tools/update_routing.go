@@ -190,7 +190,7 @@ func (r *Registry) resolveIncidentAfterRouting(ctx context.Context, in UpdateRou
 }
 
 func (r *Registry) markRecoveryStart(ctx context.Context, in UpdateRoutingInput) {
-	if in.TriggerType != "admin_approve" && in.TriggerType != "auto" {
+	if in.TriggerType != "admin_approve" && in.TriggerType != "auto" && in.TriggerType != "manual_baseline" {
 		return
 	}
 	applyCycle := uint64(0)

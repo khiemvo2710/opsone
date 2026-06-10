@@ -33,17 +33,6 @@ func TestE2E_DoD_ConfigAuditLog(t *testing.T) {
 	}
 }
 
-// §12 — agent_change_log có bản ghi applied sau routing update (tools test covers write; verify list API).
-func TestE2E_DoD_AgentChangesAPI(t *testing.T) {
-	db, cfg := requireE2E(t)
-	srv := testAPIServer(t, db, cfg)
-
-	rec := apiGet(t, srv, "/api/v1/agent-changes?status=applied")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("agent-changes: %d %s", rec.Code, rec.Body.String())
-	}
-}
-
 // §12 — incidents list API (seed có ít nhất 0; endpoint phải 200).
 func TestE2E_DoD_IncidentsAPI(t *testing.T) {
 	db, cfg := requireE2E(t)

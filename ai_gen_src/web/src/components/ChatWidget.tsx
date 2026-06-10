@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 're
 import { useMutation } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useVoiceInput } from '../hooks/useVoiceInput';
+import { useChatDock } from '../hooks/useChatDock';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -14,6 +15,9 @@ export function ChatWidget() {
   const [input, setInput] = useState('');
   const [sessionId] = useState(() => crypto.randomUUID());
   const feedRef = useRef<HTMLDivElement>(null);
+  const widgetRef = useRef<HTMLDivElement>(null);
+  const { corner, floatPos, isDragging, onDragStart, onDragMove, onDragEnd, consumeDragClick } =
+    useChatDock(widgetRef);
 
   const scrollFeedToBottom = useCallback(() => {
     const feed = feedRef.current;
@@ -57,11 +61,45 @@ export function ChatWidget() {
     }
   };
 
+  const handleHeaderPointerDown = (e: React.PointerEvent<HTMLElement>) => {
+    if ((e.target as HTMLElement).closest('.chat-widget__close')) return;
+    onDragStart(e);
+  };
+
+  const handleTogglePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    onDragStart(e);
+  };
+
+  const finishDrag = (e: React.PointerEvent) => {
+    onDragEnd(e);
+    if (!open && !consumeDragClick()) {
+      setOpen(true);
+    }
+  };
+
+  const handleWidgetPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    finishDrag(e);
+  };
+
+  const dockStyle = floatPos
+    ? { left: floatPos.left, top: floatPos.top, right: 'auto', bottom: 'auto' }
+    : undefined;
+
   return (
-    <div className={`chat-widget${open ? ' chat-widget--open' : ''}`}>
+    <div
+      ref={widgetRef}
+      className={`chat-widget chat-widget--${corner}${open ? ' chat-widget--open' : ''}${isDragging ? ' chat-widget--dragging' : ''}`}
+      style={dockStyle}
+      onPointerMove={onDragMove}
+      onPointerUp={handleWidgetPointerUp}
+      onPointerCancel={finishDrag}
+    >
       {open ? (
         <div className="chat-widget__panel">
-          <header className="chat-widget__header">
+          <header
+            className="chat-widget__header chat-widget__drag-handle"
+            onPointerDown={handleHeaderPointerDown}
+          >
             <strong>Chat OpsOne</strong>
             <button
               type="button"
@@ -72,7 +110,7 @@ export function ChatWidget() {
               −
             </button>
           </header>
-          <p className="chat-widget__hint muted">Enter gửi · Shift+Enter xuống dòng</p>
+          <p className="chat-widget__hint muted">Kéo header để đổi góc · Enter gửi</p>
 
           <div className="chat-widget__feed" ref={feedRef}>
             {messages.length === 0 && (
@@ -129,8 +167,9 @@ export function ChatWidget() {
       ) : (
         <button
           type="button"
-          className="chat-widget__toggle btn btn--primary"
-          onClick={() => setOpen(true)}
+          className="chat-widget__toggle btn btn--primary chat-widget__drag-handle"
+          title="Kéo để đổi góc · Bấm để mở chat"
+          onPointerDown={handleTogglePointerDown}
         >
           Chat
         </button>

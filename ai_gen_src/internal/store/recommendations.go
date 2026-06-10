@@ -125,6 +125,36 @@ func (db *DB) ListPendingMaintenanceByScope(ctx context.Context) (map[string]Pen
 	return out, rows.Err()
 }
 
+// LatestDismissedMaintenanceCycleForScope returns cycle_id of the newest DISMISSED maintenance row for a scope.
+func (db *DB) LatestDismissedMaintenanceCycleForScope(ctx context.Context, product, sku string) (uint64, bool, error) {
+	pattern := "%"
+	extraFilter := ""
+	if sku != "" {
+		pattern = "SKU " + sku + "%"
+	} else {
+		extraFilter = ` AND action_detail NOT LIKE 'SKU %'`
+	}
+	const base = `
+		SELECT cycle_id FROM recommendations
+		WHERE product_code = ? AND action_type = 'maintenance'
+		  AND action_detail LIKE '%DISMISSED:%'
+		  AND action_detail LIKE ?`
+	var cycleID sql.NullInt64
+	err := db.QueryRowContext(ctx, base+extraFilter+`
+		ORDER BY id DESC
+		LIMIT 1`, product, pattern).Scan(&cycleID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if !cycleID.Valid {
+		return 0, true, nil
+	}
+	return uint64(cycleID.Int64), true, nil
+}
+
 // LatestPendingMaintenanceForScope returns the newest maintenance recommendation for product+sku.
 func (db *DB) LatestPendingMaintenanceForScope(ctx context.Context, product, sku string) (PendingRecommendation, bool, error) {
 	const query = `

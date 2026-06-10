@@ -39,7 +39,7 @@ func (s *Server) ensureScopeSuggestion(
 	if err != nil {
 		return err
 	}
-	if hasPlan {
+	if hasPlan && action.kind == "routing" {
 		return s.DB.UpdatePendingRoutingPlanForScope(ctx, nil, product, sku, action.plan)
 	}
 
@@ -81,31 +81,11 @@ func (s *Server) scopeSuggestionFromSnapshot(
 	}
 	switch action.kind {
 	case "routing":
-		if caches.isRoutingRejected(product, sku) {
-			return nil, nil
-		}
 		return s.routingPlanResponse(ctx, product, sku, action.plan), nil
 	case "maintenance":
-		th, ok := caches.threshold(product)
-		if ok && !maintenanceSuggestionStillNeeded(snap, providersFromSnapshot(snap), maintainedProviders, th) {
+		pm, ok := s.maintenanceMapFromScopeAction(ctx, caches, product, sku, snap, maintainedProviders, action)
+		if !ok {
 			return nil, nil
-		}
-		if caches.maintDismissed(product, sku) {
-			return nil, nil
-		}
-		reason := action.eval.SuggestedActionReason
-		if reason == "" {
-			reason = output.MaintenanceDetail(product, action.worst.ProviderCode, action.eval.BreachReasons)
-		}
-		pm := map[string]any{
-			"reason":      reason,
-			"action_type": "maintenance",
-			"suggested":   true,
-		}
-		if isSkuWideMaintenanceReason(reason) {
-			pm["scope_level"] = true
-		} else {
-			pm["provider_code"] = action.worst.ProviderCode
 		}
 		return nil, pm
 	default:
@@ -121,17 +101,101 @@ func (s *Server) refreshPendingRoutingFromSnapshot(
 	snap scopeSnapshot,
 	maintainedProviders []string,
 ) map[string]any {
-	if caches.isRoutingRejected(product, sku) || !snap.AnyBreached || !snap.HasWorst {
+	if !snap.AnyBreached || !snap.HasWorst {
 		return nil
 	}
 	action, err := s.resolveScopeActionFromSnapshot(ctx, caches, product, sku, snap, maintainedProviders, false)
-	if err != nil || action == nil || action.kind != "routing" {
+	if err != nil || action == nil {
+		return nil
+	}
+	if action.kind == "maintenance" {
+		_ = s.DB.CancelPendingRoutingPlansForScope(ctx, product, sku)
 		return nil
 	}
 	return s.routingPlanResponse(ctx, product, sku, action.plan)
 }
 
+// prioritizeMaintenanceSuggestion cancels stale routing plans and returns maintenance when every
+// routable provider breaches (SKURoutingDecision=maintenance) — không phụ thuộc ShouldAct.
+func (s *Server) prioritizeMaintenanceSuggestion(
+	ctx context.Context,
+	caches overviewCaches,
+	product, sku string,
+	snap scopeSnapshot,
+	maintainedProviders []string,
+	existingMaint map[string]any,
+) (map[string]any, bool) {
+	if existingMaint != nil {
+		_ = s.DB.CancelPendingRoutingPlansForScope(ctx, product, sku)
+		return existingMaint, true
+	}
+	if !snap.AnyBreached || !snap.HasWorst {
+		return nil, false
+	}
+	th, ok := caches.threshold(product)
+	if !ok {
+		return nil, false
+	}
+	routing := providersFromSnapshot(snap)
+	pc := agent.ProductContext{
+		Scopes:              snap.ScopeContexts,
+		MaintainedProviders: maintainedProviderSet(maintainedProviders),
+	}
+	kind, _ := agent.SKURoutingDecision(pc, sku, routing, th)
+	if kind != "maintenance" || !maintenanceSuggestionStillNeeded(snap, routing, maintainedProviders, th) {
+		return nil, false
+	}
+	action, err := s.resolveScopeActionFromSnapshot(ctx, caches, product, sku, snap, maintainedProviders, false)
+	if err != nil || action == nil || action.kind != "maintenance" {
+		return nil, false
+	}
+	pm, ok := s.maintenanceMapFromScopeAction(ctx, caches, product, sku, snap, maintainedProviders, action)
+	if !ok {
+		return nil, false
+	}
+	_ = s.DB.CancelPendingRoutingPlansForScope(ctx, product, sku)
+	return pm, true
+}
+
+func (s *Server) maintenanceMapFromScopeAction(
+	ctx context.Context,
+	caches overviewCaches,
+	product, sku string,
+	snap scopeSnapshot,
+	maintainedProviders []string,
+	action *scopeAction,
+) (map[string]any, bool) {
+	if action == nil || action.kind != "maintenance" {
+		return nil, false
+	}
+	if s.maintenanceSuggestionSuppressedAfterDismiss(ctx, product, sku, caches.latestCycleID) {
+		return nil, false
+	}
+	th, ok := caches.threshold(product)
+	if ok && !maintenanceSuggestionStillNeeded(snap, providersFromSnapshot(snap), maintainedProviders, th) {
+		return nil, false
+	}
+	reason := action.eval.SuggestedActionReason
+	if reason == "" {
+		reason = output.MaintenanceDetail(product, action.worst.ProviderCode, action.eval.BreachReasons)
+	}
+	pm := map[string]any{
+		"reason":      reason,
+		"action_type": "maintenance",
+		"suggested":   true,
+	}
+	if isSkuWideMaintenanceReason(reason) {
+		pm["scope_level"] = true
+	} else {
+		pm["provider_code"] = action.worst.ProviderCode
+	}
+	return pm, true
+}
+
 func (s *Server) routingPlanResponse(ctx context.Context, product, sku string, plan agent.RoutingPlanJSON) map[string]any {
+	if s.routingProposalSuppressedAfterReject(ctx, product, sku, plan) {
+		return nil
+	}
 	hasPlan, err := s.DB.HasPendingRoutingPlan(ctx, product, sku)
 	if err != nil {
 		return syntheticPendingPlanMap(product, sku, plan)
@@ -215,7 +279,7 @@ func maintenanceWarrantedFromSnapshot(
 	maintainedProviders []string,
 	th store.ProductThreshold,
 ) bool {
-	if !snap.ShouldAct || !snap.HasWorst {
+	if !snap.AnyBreached || !snap.HasWorst {
 		return false
 	}
 	pc := agent.ProductContext{
@@ -587,6 +651,179 @@ func metricsSince(windowMin int) time.Time {
 		windowMin = 15
 	}
 	return time.Now().Add(-time.Duration(windowMin) * time.Minute)
+}
+
+func routingMapsEqual(a, b map[string]float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if math.Abs(v-b[k]) > 0.05 {
+			return false
+		}
+	}
+	return true
+}
+
+// routingProposalSuppressedByReject skips re-showing the same synthetic plan after admin reject (no time window).
+func routingProposalSuppressedByReject(latest store.RoutingPlanRow, plan agent.RoutingPlanJSON) bool {
+	if latest.Status != "rejected" {
+		return false
+	}
+	var stored agent.RoutingPlanJSON
+	if err := json.Unmarshal(latest.PlanJSON, &stored); err != nil {
+		return false
+	}
+	return routingMapsEqual(stored.Proposed, plan.Proposed)
+}
+
+func (s *Server) routingProposalSuppressedAfterReject(ctx context.Context, product, sku string, plan agent.RoutingPlanJSON) bool {
+	latest, ok, err := s.DB.GetLatestRoutingPlanForScope(ctx, product, sku)
+	if err != nil || !ok {
+		return false
+	}
+	return routingProposalSuppressedByReject(latest, plan)
+}
+
+// scopeAutoApplyAllowed reports whether poll auto-apply may run (ShouldAct or force maintenance).
+func scopeAutoApplyAllowed(
+	snap scopeSnapshot,
+	sku string,
+	routing map[string]float64,
+	maintainedProviders []string,
+	th store.ProductThreshold,
+) bool {
+	if snap.ShouldAct {
+		return true
+	}
+	if !snap.AnyBreached || !snap.HasWorst {
+		return false
+	}
+	pc := agent.ProductContext{
+		Scopes:              snap.ScopeContexts,
+		MaintainedProviders: maintainedProviderSet(maintainedProviders),
+	}
+	return agent.ShouldForceAutoMaintenance(pc, sku, routing, th) ||
+		agent.ShouldForceAutoMaintenanceAllProviders(pc, sku, routing, th) ||
+		agent.ShouldForceAutoRouting(pc, sku, routing, th)
+}
+
+// autoApplyScopeFromSnapshot applies routing/maintenance when scope is in auto mode (§9.5.2).
+func (s *Server) autoApplyScopeFromSnapshot(
+	ctx context.Context,
+	caches overviewCaches,
+	product, sku string,
+	snap scopeSnapshot,
+	maintainedProviders []string,
+	inRecoveryGrace bool,
+) (bool, error) {
+	if !snap.HasWorst || !snap.AnyBreached {
+		return false, nil
+	}
+	th, ok := caches.threshold(product)
+	if !ok {
+		return false, nil
+	}
+	pc, err := s.buildProductContextFromSnapshot(ctx, caches, product, sku, snap.ScopeContexts, maintainedProviders)
+	if err != nil {
+		return false, err
+	}
+	routing := providersFromSnapshot(snap)
+	forceMaint := agent.ShouldForceAutoMaintenance(pc, sku, routing, th)
+	forceAllMaint := agent.ShouldForceAutoMaintenanceAllProviders(pc, sku, routing, th)
+	forceRouting := agent.ShouldForceAutoRouting(pc, sku, routing, th)
+	if inRecoveryGrace && !forceMaint && !forceAllMaint {
+		return false, nil
+	}
+	if inRecoveryGrace {
+		forceRouting = false
+	}
+	if !snap.ShouldAct && !forceMaint && !forceAllMaint && !forceRouting {
+		return false, nil
+	}
+	requireShouldAct := snap.ShouldAct && !forceMaint && !forceAllMaint && !forceRouting
+	action, err := s.resolveScopeActionFromSnapshot(ctx, caches, product, sku, snap, maintainedProviders, requireShouldAct)
+	if err != nil || action == nil {
+		if (forceMaint || forceAllMaint) && snap.Worst.Threshold != nil {
+			return s.autoApplyMaintenanceForScope(ctx, product, sku, snap, maintainedProviders, snap.Worst, *snap.Worst.Threshold)
+		}
+		return false, err
+	}
+	switch action.kind {
+	case "routing":
+		if routingMapsEqual(action.plan.Current, action.plan.Proposed) {
+			return s.autoApplyMaintenanceForScope(ctx, product, sku, snap, maintainedProviders, action.worst, action.eval)
+		}
+		_ = s.DB.CancelPendingRoutingPlansForScope(ctx, product, sku)
+		prod, err := s.DB.GetProductByCode(ctx, product)
+		if err != nil {
+			return false, err
+		}
+		incidentID, _ := s.DB.FindOpenIncidentForScope(ctx, product, sku, nil)
+		var incPtr *string
+		if incidentID != "" {
+			incPtr = &incidentID
+		}
+		out, err := s.Tools.UpdateRouting(ctx, tools.UpdateRoutingInput{
+			Product:     product,
+			ServiceType: string(prod.ServiceType),
+			Scope:       action.plan.Scope,
+			SKU:         sku,
+			Routing:     action.plan.Proposed,
+			TriggerType: "auto",
+			ExecutedBy:  "opsone-api",
+			Reason:      action.plan.Reason,
+			IncidentID:  incPtr,
+		})
+		if err != nil {
+			return false, err
+		}
+		if out.Applied {
+			_, _ = s.DB.InsertRoutingPlan(ctx, nil, product, action.plan.Scope, sku, action.plan, "executed")
+		}
+		return out.Applied, nil
+	case "maintenance":
+		return s.autoApplyMaintenanceForScope(ctx, product, sku, snap, maintainedProviders, action.worst, action.eval)
+	default:
+		return false, nil
+	}
+}
+
+func (s *Server) autoApplyMaintenanceForScope(
+	ctx context.Context,
+	product, sku string,
+	snap scopeSnapshot,
+	maintainedProviders []string,
+	worst agent.ScopeContext,
+	eval threshold.Result,
+) (bool, error) {
+	th, err := s.DB.GetProductThreshold(ctx, product)
+	if err != nil {
+		return false, err
+	}
+	if !maintenanceSuggestionStillNeeded(snap, providersFromSnapshot(snap), maintainedProviders, th) {
+		return false, nil
+	}
+	detail := eval.SuggestedActionReason
+	if detail == "" {
+		detail = output.MaintenanceDetail(product, worst.ProviderCode, eval.BreachReasons)
+	}
+	providers, err := s.DB.GetRoutingForScope(ctx, product, sku)
+	if err != nil {
+		return false, err
+	}
+	targets := maintenanceTargetsForScope(detail, worst.ProviderCode, providers)
+	if len(targets) == 0 {
+		return false, nil
+	}
+	startsAt := time.Now()
+	endsAt := startsAt.Add(60 * time.Minute)
+	_, err = applyMaintenanceTargets(
+		ctx, s.Tools, product, sku, "opsone-api",
+		fmt.Sprintf("auto maintenance scope %s/%s", product, sku),
+		targets, startsAt, endsAt,
+	)
+	return err == nil, err
 }
 
 func (s *Server) pendingMaintenanceForScope(ctx context.Context, product, sku string) map[string]any {

@@ -80,9 +80,14 @@ func (e *Evaluator) EvaluateThresholds(ctx context.Context, in MetricInput, cons
 	}
 
 	if breached {
+		required := th.ConsecutiveCyclesRequired
+		if required <= 0 {
+			required = 2
+		}
+		res.RequiredCycles = required
 		res.ConsecutiveBreachCycles = consecutiveBreach
 		res.SuggestedAction, res.SuggestedActionReason = suggestAction(activeCount, healthyBackup)
-		if consecutiveBreach >= th.ConsecutiveCyclesRequired {
+		if consecutiveBreach >= required {
 			res.ShouldAct = true
 		}
 	}

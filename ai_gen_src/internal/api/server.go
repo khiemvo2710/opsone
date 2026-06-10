@@ -8,27 +8,24 @@ import (
 	"time"
 
 	"opsone/internal/config"
-	"opsone/internal/rollback"
 	"opsone/internal/store"
 	"opsone/internal/tools"
 )
 
 // Server is the OpsOne REST + SSE API (§2.3).
 type Server struct {
-	DB       *store.DB
-	Tools    *tools.Registry
-	Rollback *rollback.Service
-	Config   config.Config
-	mux      *http.ServeMux
+	DB     *store.DB
+	Tools  *tools.Registry
+	Config config.Config
+	mux    *http.ServeMux
 }
 
 // NewServer wires dependencies.
 func NewServer(db *store.DB, cfg config.Config) *Server {
 	s := &Server{
-		DB:       db,
-		Tools:    tools.NewRegistry(db),
-		Rollback: &rollback.Service{DB: db},
-		Config:   cfg,
+		DB:     db,
+		Tools:  tools.NewRegistry(db),
+		Config: cfg,
 	}
 	s.routes()
 	return s
@@ -46,8 +43,6 @@ func (s *Server) routes() {
 	mux.HandleFunc("/api/v1/routing-plans/", s.routeRoutingPlans)
 	mux.HandleFunc("/api/v1/routing-plans/latest", s.handleRoutingPlansLatest)
 	mux.HandleFunc("/api/v1/recommendations/", s.routeRecommendations)
-	mux.HandleFunc("/api/v1/agent-changes", s.routeAgentChanges)
-	mux.HandleFunc("/api/v1/agent-changes/", s.routeAgentChanges)
 	mux.HandleFunc("/api/v1/maintenance", s.routeMaintenance)
 	mux.HandleFunc("/api/v1/maintenance/", s.routeMaintenance)
 	mux.HandleFunc("/api/v1/notifications", s.handleNotificationsList)
@@ -182,34 +177,6 @@ func (s *Server) routeRoutingPlans(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusMethodNotAllowed, "method", "Method not allowed")
 }
 
-func (s *Server) routeAgentChanges(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/v1/agent-changes")
-	path = strings.Trim(path, "/")
-	if path == "" {
-		if r.Method == http.MethodGet {
-			s.handleAgentChangesList(w, r)
-			return
-		}
-		writeError(w, http.StatusMethodNotAllowed, "method", "Method not allowed")
-		return
-	}
-	parts := strings.Split(path, "/")
-	id, ok := parseUintPath(parts[0])
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid_id", "ID không hợp lệ")
-		return
-	}
-	if len(parts) == 2 && parts[1] == "rollback" && r.Method == http.MethodPost {
-		s.handleAgentChangeRollback(w, r, id)
-		return
-	}
-	if r.Method == http.MethodGet && len(parts) == 1 {
-		s.handleAgentChangeGet(w, r, id)
-		return
-	}
-	writeError(w, http.StatusMethodNotAllowed, "method", "Method not allowed")
-}
-
 func (s *Server) routeMaintenance(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/maintenance")
 	path = strings.Trim(path, "/")
@@ -286,6 +253,8 @@ func (s *Server) routeScopes(w http.ResponseWriter, r *http.Request) {
 			s.handleScopeRoutingApprove(w, r, product, sku)
 		case "apply":
 			s.handleScopeRoutingApply(w, r, product, sku)
+		case "restore-baseline":
+			s.handleScopeRoutingRestoreBaseline(w, r, product, sku)
 		case "reject":
 			s.handleScopeRoutingReject(w, r, product, sku)
 		default:
@@ -299,6 +268,8 @@ func (s *Server) routeScopes(w http.ResponseWriter, r *http.Request) {
 			s.handleScopeMaintenanceReject(w, r, product, sku)
 		case "cancel":
 			s.handleScopeMaintenanceCancel(w, r, product, sku)
+		case "reopen-service":
+			s.handleScopeMaintenanceReopenService(w, r, product, sku)
 		case "extend":
 			s.handleScopeMaintenanceExtend(w, r, product, sku)
 		default:

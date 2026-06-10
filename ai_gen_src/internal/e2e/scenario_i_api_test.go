@@ -10,55 +10,6 @@ import (
 	"opsone/internal/tools"
 )
 
-// §10.9 — UpdateRouting → agent_change_log → rollback API → routing về before.
-func TestE2E_ScenarioI_RollbackViaAPI(t *testing.T) {
-	db, cfg := requireE2E(t)
-	ctx := context.Background()
-	srv := testAPIServer(t, db, cfg)
-	reg := tools.NewRegistry(db)
-
-	before, err := db.GetRoutingForScope(ctx, "TOPUP_VINA", "")
-	if err != nil {
-		t.Fatalf("GetRoutingForScope: %v", err)
-	}
-	beforeMap := map[string]float64{}
-	for _, r := range before {
-		beforeMap[r.ProviderCode] = r.TrafficPct
-	}
-
-	out, err := reg.UpdateRouting(ctx, tools.UpdateRoutingInput{
-		Product:     "TOPUP_VINA",
-		ServiceType: "topup",
-		Scope:       "provider",
-		Routing:     map[string]float64{"ESALE": 55, "IMEDIA": 30, "SHOPPAY": 15},
-		Reason:      "e2e §10.9 rollback via API",
-	})
-	if err != nil {
-		t.Fatalf("UpdateRouting: %v", err)
-	}
-	if len(out.ChangeLogIDs) != 1 {
-		t.Fatalf("change_log_ids = %v, want 1", out.ChangeLogIDs)
-	}
-	changeID := out.ChangeLogIDs[0]
-
-	rec := apiPostJSON(t, srv, fmt.Sprintf("/api/v1/agent-changes/%d/rollback", changeID),
-		`{"reason":"e2e rollback §10.9"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("rollback API: %d %s", rec.Code, rec.Body.String())
-	}
-
-	restored, err := db.GetRoutingForScope(ctx, "TOPUP_VINA", "")
-	if err != nil {
-		t.Fatalf("GetRoutingForScope after rollback: %v", err)
-	}
-	for _, r := range restored {
-		want := beforeMap[r.ProviderCode]
-		if r.TrafficPct != want {
-			t.Errorf("%s = %.0f, want %.0f (seed/before)", r.ProviderCode, r.TrafficPct, want)
-		}
-	}
-}
-
 // Approve routing plan → UpdateRouting + agent_change_log.
 func TestE2E_ApproveRoutingPlan(t *testing.T) {
 	db, cfg := requireE2E(t)
