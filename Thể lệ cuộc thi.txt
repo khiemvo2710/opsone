@@ -1,0 +1,25 @@
+Starter ơi,
+Tại VNG, AI đã và đang trở thành một phần trong cách mỗi thành viên học hỏi, làm việc và sáng tạo mỗi ngày. Tinh thần nhiệt huyết, sẵn sàng “thực chiến” ấy đang lan tỏa mạnh mẽ hơn bao giờ hết, trở thành nguồn động lực cho VNG trên hành trình trở thành một doanh nghiệp AI-native toàn diện.
+Để tiếp thêm tinh thần đó, GreenNode Claw-a-thon chính thức khởi động, mang đến sân chơi thú vị với 7 ngày thử thách xây dựng AI Agent dành cho tất cả Starter. Với sự hỗ trợ tài nguyên công nghệ từ GreenNode, đây sẽ là bệ phóng lý tưởng để Starter tự tin hiện thực hóa các ý tưởng AI của chính mình.
+👥 Đối tượng tham gia: Tất cả Starter.
+🔎 Hình thức tham gia: Cá nhân hoặc nhóm lên đến 3 người.
+💻 Starter nhanh tay đăng ký ngay TẠI ĐÂY.
+Lưu ý:
+•	BTC khuyến khích có sự kết hợp giữa các tech Starter và non-tech Starter trong một đội. Điều này giúp đội thi vừa hiểu sâu bài toán vận hành, vừa triển khai kỹ thuật nhanh chóng và hiệu quả.
+•	Trường hợp đội thi không có tech Starter, đội ngũ kỹ thuật của BTC sẽ sẵn sàng hỗ trợ, cố vấn để giúp bạn hoàn thiện dự án một cách tốt nhất.
+❇️ 03 CHỦ ĐỀ THI THỰC TIỄN TẠI GREENNODE CLAW-A-THON
+•	Chat Agent: Xây dựng conversational agent giải quyết bài toán từ phòng ban.
+•	Data Analysis: Xây dựng agent phân tích và trực quan hóa số liệu kinh doanh.
+•	Coding & Automation: Xây dựng agent tự động hóa quy trình vận hành, viết code hoặc xử lý tác vụ lặp đi lặp lại.
+⏰ CÁC MỐC THỜI GIAN CHÍNH
+Starter hãy lưu lại lịch trình dưới đây để không bỏ lỡ các cột mốc quan trọng của cuộc thi nhé!
+| Thời gian         | Sự kiện                                                               |
+| ----------------- | --------------------------------------------------------------------- |
+| **25/05**         | Công bố mở đăng ký chính thức                                         |
+| **29/05**         | Info Day (Online Webinar) - Giải đáp thắc mắc cho Starter             |
+| **05/06**         | Online Webinar - Hướng dẫn kỹ thuật viết câu lệnh xây dựng AI Agent   |
+| **09/06**         | Hạn chót đăng ký tham gia                                             |
+| **10/06 - 17/06** | 🚀 **7 ngày bứt phá** - Các đội chính thức xây dựng AI Agent          |
+| **10/06**         | Training Workshop cho đội thi - Hướng dẫn sử dụng GreenNode AgentBase |
+| **22/06 - 03/07** | Cổng bình chọn AI Agent mở tự do cho tất cả Starter                   |
+| **03/07**         | 🏆 Lễ trao giải tại VNG Campus                                        |

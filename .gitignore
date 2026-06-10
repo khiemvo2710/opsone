@@ -1,0 +1,29 @@
+# Secrets & local config
+.env
+.env.*
+!.env.example
+!.env.*.example
+.greennode.json
+.agentbase/
+
+# Nested vendor repo (clone separately)
+greennode-agentbase-skills/
+
+# Node / frontend build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Go binaries
+bin/
+*.exe
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Docker / local tools
+tools/

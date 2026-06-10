@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.greennode.example
+.greennode.json
+.agentbase/
+web/
+bin/
+node_modules/
+**/*_test.go
+.git/
+scripts/
+db/
