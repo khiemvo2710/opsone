@@ -123,6 +123,19 @@ function isMaintenanceRejected(
   return maintId != null && maintActions[maintId] === 'rejected';
 }
 
+/** Ẩn đề xuất bảo trì sau duyệt/từ chối hoặc khi cửa sổ bảo trì đã active. */
+function shouldShowPendingMaintenance(
+  row: DashboardOverviewRow,
+  scopeKey: string,
+  maintScopeDone: Record<string, { maintId: number; action: PlanAction }>,
+  maintActions: Record<number, PlanAction>,
+): boolean {
+  if (!row.pending_maintenance) return false;
+  if (row.maintenance) return false;
+  if (maintScopeDone[scopeKey]?.action === 'approved') return false;
+  return !isMaintenanceRejected(scopeKey, row.pending_maintenance, maintScopeDone, maintActions);
+}
+
 function countSubRows(
   row: DashboardOverviewRow,
   scopeKey: string,
@@ -135,10 +148,7 @@ function countSubRows(
   if (row.pending_plan && !isRoutingRejected(scopeKey, row.pending_plan, scopeDone, planActions)) {
     n += 1;
   }
-  if (
-    row.pending_maintenance &&
-    !isMaintenanceRejected(scopeKey, row.pending_maintenance, maintScopeDone, maintActions)
-  ) {
+  if (shouldShowPendingMaintenance(row, scopeKey, maintScopeDone, maintActions)) {
     n += 1;
   }
   return n;
@@ -369,13 +379,13 @@ export function ServiceOverviewTable({
                   (isSuggested ||
                     plan.status === 'pending_approve' ||
                     plan.status === 'draft');
-                const maintRejected = isMaintenanceRejected(
+                const showPendingMaint = shouldShowPendingMaintenance(
+                  row,
                   scopeKey,
-                  row.pending_maintenance,
                   maintScopeDone,
                   maintActions,
                 );
-                const isPendingMaint = Boolean(row.pending_maintenance && !maintDone && !maintRejected);
+                const isPendingMaint = Boolean(showPendingMaint && !maintDone);
                 const canActReal =
                   isPending && !isSuggested && onApprove && onReject && planId != null && planId > 0;
                 const canActSuggested =
@@ -591,7 +601,7 @@ export function ServiceOverviewTable({
 
                 const subRows: ReactNode[] = [];
 
-                if (row.pending_maintenance && !maintRejected) {
+                if (showPendingMaint && row.pending_maintenance) {
                   const pm = row.pending_maintenance;
                   const maintId = pm.id;
                   const isSuggestedMaint = Boolean(pm.suggested || maintId == null);

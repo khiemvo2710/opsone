@@ -77,7 +77,7 @@ function tabMetaMap(
 }
 
 function removePendingPlan(data: DashboardOverview | undefined, planId: number): DashboardOverview | undefined {
-  if (!data) return data;
+  if (!data?.rows) return data;
   return {
     ...data,
     rows: data.rows.map((row) =>
@@ -90,7 +90,7 @@ function removePendingMaintenance(
   data: DashboardOverview | undefined,
   maintId: number,
 ): DashboardOverview | undefined {
-  if (!data) return data;
+  if (!data?.rows) return data;
   return {
     ...data,
     rows: data.rows.map((row) =>
@@ -105,7 +105,7 @@ function removeScopePending(
   skuCode: string,
   kind: 'routing' | 'maintenance',
 ): DashboardOverview | undefined {
-  if (!data) return data;
+  if (!data?.rows) return data;
   return {
     ...data,
     rows: data.rows.map((row) => {
@@ -171,7 +171,7 @@ export function Dashboard() {
 
   const refreshOverview = async (planId: number, action: PlanAction) => {
     const before = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
-    const row = before?.rows.find((r) => r.pending_plan?.id === planId);
+    const row = before?.rows?.find((r) => r.pending_plan?.id === planId);
     if (row) {
       const scopeKey = `${row.product_code}:${row.sku_code}`;
       setScopeDone((prev) => ({ ...prev, [scopeKey]: { planId, action } }));
@@ -187,7 +187,7 @@ export function Dashboard() {
     const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
     if (row) {
       const scopeKey = `${row.product_code}:${row.sku_code}`;
-      const newPlan = fresh?.rows.find((r) => `${r.product_code}:${r.sku_code}` === scopeKey)?.pending_plan;
+      const newPlan = fresh?.rows?.find((r) => `${r.product_code}:${r.sku_code}` === scopeKey)?.pending_plan;
       if (!newPlan || action === 'rejected') {
         setScopeDone((prev) => {
           const next = { ...prev };
@@ -238,7 +238,7 @@ export function Dashboard() {
 
   const refreshMaintenanceOverview = async (maintId: number, action: PlanAction) => {
     const before = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
-    const row = before?.rows.find((r) => r.pending_maintenance?.id === maintId);
+    const row = before?.rows?.find((r) => r.pending_maintenance?.id === maintId);
     if (row) {
       const scopeKey = `${row.product_code}:${row.sku_code}`;
       setMaintScopeDone((prev) => ({ ...prev, [scopeKey]: { maintId, action } }));
@@ -251,23 +251,27 @@ export function Dashboard() {
     void qc.invalidateQueries({ queryKey: ['health-status'] });
     void qc.invalidateQueries({ queryKey: ['maintenance'] });
 
-    if (action === 'rejected') {
-      const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
-      const scopeKey = row ? `${row.product_code}:${row.sku_code}` : '';
-      if (
-        scopeKey &&
-        !fresh?.rows.find((r) => `${r.product_code}:${r.sku_code}` === scopeKey)?.pending_maintenance
-      ) {
+    const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
+    const scopeKey = row ? `${row.product_code}:${row.sku_code}` : '';
+    if (scopeKey) {
+      const freshRow = fresh?.rows?.find((r) => `${r.product_code}:${r.sku_code}` === scopeKey);
+      const resolved =
+        action === 'approved'
+          ? Boolean(freshRow?.maintenance) || !freshRow?.pending_maintenance
+          : action === 'rejected' && !freshRow?.pending_maintenance;
+      if (resolved) {
         setMaintScopeDone((prev) => {
           const next = { ...prev };
           delete next[scopeKey];
           return next;
         });
-        setMaintActions((prev) => {
-          const next = { ...prev };
-          delete next[maintId];
-          return next;
-        });
+        if (action === 'rejected') {
+          setMaintActions((prev) => {
+            const next = { ...prev };
+            delete next[maintId];
+            return next;
+          });
+        }
       }
     }
   };
@@ -331,7 +335,7 @@ export function Dashboard() {
 
     if (action === 'rejected') {
       const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
-      if (!fresh?.rows.find((r) => r.product_code === payload.productCode && r.sku_code === payload.skuCode)?.pending_plan) {
+      if (!fresh?.rows?.find((r) => r.product_code === payload.productCode && r.sku_code === payload.skuCode)?.pending_plan) {
         setScopeDone((prev) => {
           const next = { ...prev };
           delete next[scopeKey];
@@ -354,15 +358,20 @@ export function Dashboard() {
     void qc.invalidateQueries({ queryKey: ['health-status'] });
     void qc.invalidateQueries({ queryKey: ['maintenance'] });
 
-    if (action === 'rejected') {
-      const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
-      if (!fresh?.rows.find((r) => r.product_code === payload.productCode && r.sku_code === payload.skuCode)?.pending_maintenance) {
-        setMaintScopeDone((prev) => {
-          const next = { ...prev };
-          delete next[scopeKey];
-          return next;
-        });
-      }
+    const fresh = qc.getQueryData<DashboardOverview>(['dashboard-overview']);
+    const freshRow = fresh?.rows?.find(
+      (r) => r.product_code === payload.productCode && r.sku_code === payload.skuCode,
+    );
+    const resolved =
+      action === 'approved'
+        ? Boolean(freshRow?.maintenance) || !freshRow?.pending_maintenance
+        : action === 'rejected' && !freshRow?.pending_maintenance;
+    if (resolved) {
+      setMaintScopeDone((prev) => {
+        const next = { ...prev };
+        delete next[scopeKey];
+        return next;
+      });
     }
   };
 

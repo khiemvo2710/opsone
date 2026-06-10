@@ -137,10 +137,10 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 		}
 
 		switch {
-		case maintWarranted && liveMaint != nil:
+		case !inActiveMaint && maintWarranted && liveMaint != nil:
 			liveMaint["reason"] = liveMaintenanceReason(k.product, k.sku, snap, liveMaint, th)
 			item["pending_maintenance"] = liveMaint
-		case maintWarranted && dbMaint != nil:
+		case !inActiveMaint && maintWarranted && dbMaint != nil:
 			dbMaint["reason"] = liveMaintenanceReason(k.product, k.sku, snap, dbMaint, th)
 			item["pending_maintenance"] = dbMaint
 		case livePlan != nil && !inActiveMaint:

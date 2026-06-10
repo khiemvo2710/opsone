@@ -37,7 +37,7 @@ export function rowPendingApprove(row: DashboardOverviewRow): boolean {
   ) {
     return true;
   }
-  return Boolean(row.pending_maintenance);
+  return Boolean(row.pending_maintenance && !row.maintenance);
 }
 
 /** Trạng thái hiển thị cột TT — dùng health_status từ API (đã tính consecutive_cycles). */
