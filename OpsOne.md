@@ -479,8 +479,8 @@ opsone/
 │   ├── threshold/           # Đánh giá ngưỡng per product §1.2 / §7.5
 │   ├── reasoning/           # LLM client + prompt builder
 │   ├── health/              # health_status green/yellow/red §8.2
-│   ├── api/                 # REST + SSE §2.3; chat agent §7.6.5 — chat_agent.go, chat_maintenance.go, …
-│   ├── chatresolve/         # Alias + intent BT/SKU §7.6.5 (`intent.go`, `sku.go`, `aliases.go`)
+│   ├── api/                 # REST + SSE §2.3; chat agent §7.6.5 — chat_agent.go, chat_metrics.go, chat_maintenance.go, …
+│   ├── chatresolve/         # Alias + intent metrics/BT/SKU §7.6.5 (`intent.go`, `sku.go`, `aliases.go`)
 │   ├── healthserver/        # GET /health :8080 — probe AgentBase trước khi nối MySQL (api/workers)
 │   └── llm/                 # OpenAI-compatible MaaS client §7.6.7 (GreenNode AIP)
 ├── Dockerfile               # api — GreenNode AgentBase
@@ -2545,10 +2545,13 @@ OUTPUT (plain text — KHÔNG markdown):
 
 #### 7.6.5 Chat Agent — On-demand chat/voice (§9) ✅ triển khai
 
-**Code:** `internal/api/chat_agent.go`, `internal/api/chat_maintenance.go`, `internal/api/chat_actions.go`, `internal/chatresolve/` (`aliases.go`, `intent.go`, `sku.go`), `internal/tools/maintenance_format.go`, `internal/tools/maintenance_build.go`, `internal/llm/client.go` — `POST /api/v1/chat` `{ "message", "session_id?" }`.
+**Code:** `internal/api/chat_agent.go`, `internal/api/chat_metrics.go`, `internal/api/chat_maintenance.go`, `internal/api/chat_actions.go`, `internal/chatresolve/` (`aliases.go`, `intent.go`, `sku.go`), `internal/tools/metrics_format.go`, `internal/tools/maintenance_format.go`, `internal/tools/maintenance_build.go`, `internal/store/chat_intent_stats.go`, `internal/llm/client.go` — `POST /api/v1/chat` `{ "message", "session_id?" }`.
+
+**Thứ tự routing (`chatAgentReply`):** `DetectChatIntent` → ghi `chat_intent_stats` (§7.6.5.3) → **`tryChatMetricsReply`** (§7.6.5.2) → **`tryChatMaintenanceReply`** (§7.6.5.1) → LLM tool loop.
 
 | Trạng thái | Hành vi |
 |------------|---------|
+| **Câu hỏi metric / GD pending** (§7.6.5.2) | **Luôn** tra DB trực tiếp (`tryChatMetricsReply`) — **không** chuyển sang LLM; metric = `provider_metrics` Dashboard (cửa sổ 15m) |
 | **Câu hỏi bảo trì** (§7.6.5.1) | **Luôn** tra DB trực tiếp (`tryChatMaintenanceReply`) — **không** chuyển sang LLM; dữ liệu = `GET /dashboard/overview` |
 | `LLM_API_KEY` **có** | Agent loop OpenAI-compatible (GreenNode AIP), tool calling tối đa **6 vòng**; session in-memory tối đa **40** message/`session_id` |
 | `LLM_API_KEY` **trống** | Fallback keyword stub (`handlers.go` — health/incident/**bảo trì** cơ bản) |
@@ -2582,29 +2585,63 @@ OUTPUT (plain text — KHÔNG markdown):
 | `get_incidents` | sự cố gần đây |
 | `list_pending_actions` | routing plan + đề xuất bảo trì chờ duyệt |
 
+##### 7.6.5.2 Tra cứu metric / GD pending — direct reply (khớp Dashboard)
+
+**Vấn đề đã xử lý:** Câu *"thẻ Mobifone 50.000 … quay đơn … banding"* bị nhận nhầm là bảo trì (`IsMaintenanceScopeQuery` chỉ vì có *thẻ + mệnh giá*) → trả *"không có bảo trì"* thay vì **29 GD pending ESALE** trên Dashboard.
+
+**Luồng (`chat_metrics.go` → `tryChatMetricsReply`):**
+
+1. `chatresolve.ShouldLookupMetrics` — true khi:
+   - Có token metric/pending (`pending`, `GD pending`, `quay đơn`, `banding`, `treo`, `kẹt đơn`, `success`, `fail`, …), **hoặc**
+   - **Follow-up** sau câu hỏi metric trong cùng `session_id`.
+2. `ExtractProductFromText` / `ExtractSKUFromText` + `NormalizeSKU`; fallback lịch sử session. Thẻ/topup data (`routing_mode=sku`) **bắt buộc** SKU.
+3. **`metricsForChat(product, sku)`** — **cùng nguồn Dashboard:**
+   - `GetAgentSettings` → `data_source` (`mock` / `production`);
+   - `GetMetricsInWindow` per provider `ESALE` / `IMEDIA` / `SHOPPAY` (cửa sổ **15m**);
+   - Tính `pending_txn` / `fail_txn` = `round(total × rate / 100)`;
+   - So ngưỡng `GetProductThreshold` → `ScopeBreachedFromSnapshot` / `SnapshotBreachReasons`.
+4. **`FormatMetricsReply`** — trả lời tiếng Việt theo provider; nhấn GD pending khi câu hỏi pending-focused.
+5. **Không fall-through LLM** — kể cả lỗi DB hoặc thiếu product/SKU → message trực tiếp.
+
+**Ưu tiên intent:** `DetectChatIntent` chọn **metrics trước maintenance**; `IsMaintenanceScopeQuery` **bỏ qua** khi `IsMetricsQuery`.
+
+**Nhận biết deploy đúng:** câu trả lời dạng `**MOBIFONE 50000** — GD pending (cửa sổ 15m):` + `**ESALE**: **29** GD pending` — **không** có *"không có bảo trì"*.
+
+**Ví dụ metric:**
+
+```text
+USER: "hiện tại thẻ Mobifone 50.000 đi qua rồi quay đơn có đang bị banding không"
+→ MOBIFONE / sku=50000 → ESALE 29 GD pending (3.6%), cảnh báo vượt ngưỡng pending_txn.
+
+USER: "TOPUP_MOBI ESALE pending thế nào?"
+→ get_metrics path LLM nếu không khớp direct; hoặc direct khi có token pending + product.
+```
+
 ##### 7.6.5.1 Tra cứu bảo trì — direct reply (khớp Dashboard)
 
-**Vấn đề đã xử lý:** LLM tự kết luận sai (vd *"provider ESALE không có bảo trì"* trong khi Dashboard hiện BT); gọi tool với `provider`/`sku` sai (`10.000` ≠ `10000`); follow-up không có từ *bảo trì*; lệch múi giờ khi SQL dùng `ends_at > NOW()` thay vì lọc `time.Now()` như overview.
+**Vấn đề đã xử lý:** LLM tự kết luận sai (vd *"provider ESALE không có bảo trì"* trong khi Dashboard hiện BT); gọi tool với `provider`/`sku` sai (`10.000` ≠ `10000`); follow-up không có từ *bảo trì*; lệch múi giờ khi SQL dùng `ends_at > NOW()` thay vì lọc `time.Now()` như overview; **cả câu hỏi bị upper-case thành tên product giả** khi không nhận diện alias (`ExtractProductFromText` trả `""` thay vì upper-case toàn bộ message).
 
 **Luồng (`chat_maintenance.go` → `tryChatMaintenanceReply`):**
 
 1. `chatresolve.ShouldLookupMaintenance(userMsg, sessionHistory)` — true khi:
+   - **Không** phải câu metric (§7.6.5.2), **và**
    - Có token bảo trì (`bảo trì`, `có bảo trì`, `đang bảo trì`, `đang bt`, `maintenance`, …), **hoặc**
-   - Có **thẻ + mệnh giá** (`IsMaintenanceScopeQuery`: *thẻ Mobifone 10.000*), **hoặc**
-   - **Follow-up** sau câu hỏi bảo trì trong cùng `session_id`.
+   - Có **thẻ + mệnh giá** (`IsMaintenanceScopeQuery`: *thẻ Mobifone 10.000* — **chỉ** khi không phải câu pending/metric), **hoặc**
+   - **Follow-up** sau câu hỏi bảo trì trong cùng `session_id`, **hoặc**
+   - Câu **toàn hệ thống** (`IsGlobalMaintenanceQuery`: *ngoài ra còn dịch vụ nào đang bảo trì*).
 2. `ExtractProductFromText` / `ExtractSKUFromText` + `NormalizeSKU` (`10.000` → `10000`); fallback lịch sử session.
 3. **`maintenanceForChat(product, sku?)`** — **cùng nguồn Dashboard:**
    - `ListMaintenanceWindows(product, status='active', limit=500)`;
    - Lọc in-window trong Go: `!ends.Before(now) && !starts.After(now)` (`MaintenanceInWindow` — §9.0);
    - Tuỳ chọn lọc `sku_code`; thêm `scheduled` tương lai.
-4. **`FormatMaintenanceReply`** — trả lời tiếng Việt theo SKU/provider.
+4. **`FormatMaintenanceReply`** / **`FormatAllMaintenanceReply`** (câu toàn hệ thống, `product=""`) — trả lời tiếng Việt theo SKU/provider.
 5. **Không fall-through LLM** — kể cả lỗi DB hoặc không nhận product → trả message trực tiếp (stub tiếng Việt).
 
 **Tool `get_maintenance` (LLM):** cũng gọi `maintenanceForChat` + `EnrichMaintenanceOutput`; `provider` routing tuỳ chọn qua `FilterMaintenanceByProvider`.
 
 **`NormalizeToolArgs`:** `provider` nhầm tên dịch vụ → `product`; `sku` qua `NormalizeSKU`. Provider routing chỉ `ESALE`/`IMEDIA`/`SHOPPAY`.
 
-**Nhận biết deploy đúng:** câu trả lời dạng `**GARENA** — có **N** mệnh giá đang bảo trì:` — **không** có câu LLM kiểu *"(provider ESALE) không có bảo trì"*.
+**Nhận biết deploy đúng:** câu trả lời dạng `**GARENA** — có **N** mệnh giá đang bảo trì:` — **không** có câu LLM kiểu *"(provider ESALE) không có bảo trì"*; **không** lặp câu hỏi user thành tên product (`**NGOÀI_RA_CÒN_...**`).
 
 **Ví dụ bảo trì:**
 
@@ -2617,7 +2654,26 @@ USER: "Thẻ Mobifone 10.000 có bảo trì không?"
 
 USER (follow-up): "Ý tôi nói là thẻ Mobifone 10.000"
 → session follow-up → MOBIFONE / 10000.
+
+USER: "Ngoài ra còn loại dịch vụ nào đang bảo trì không"
+→ FormatAllMaintenanceReply — liệt kê mọi dịch vụ đang BT, không lặp câu hỏi.
 ```
+
+##### 7.6.5.3 Thống kê câu hỏi thường gặp (`chat_intent_stats`)
+
+Mỗi lượt chat có intent đã biết (`maintenance`, `metrics`) → `BumpChatIntentStat` (async) ghi DB:
+
+| Cột | Mô tả |
+|-----|--------|
+| `intent_key` | `maintenance` \| `metrics` (mở rộng sau: `routing`, `incident`, …) |
+| `pattern_hash` | SHA-256 rút gọn của `intent_key` + message đã normalize |
+| `sample_message` | Câu mẫu gần nhất (≤512 ký tự) |
+| `hit_count` | Số lần gặp (UPSERT +1) |
+| `last_seen_at` | Lần cuối user hỏi |
+
+**Mục đích:** theo dõi pattern ops hay hỏi; ưu tiên direct reply (§7.6.5.1–2) thay vì LLM — nhanh và khớp Dashboard. UI admin xem top FAQ — *tuỳ chọn triển khai sau*.
+
+**DDL:** bảng `chat_intent_stats` — §13.9.
 
 **Tool duyệt** — chỉ khi request có role **Admin** (`X-OpsOne-Role: admin` dev / JWT prod) **và** user **yêu cầu rõ** duyệt/từ chối:
 
@@ -4321,7 +4377,7 @@ Schema mở rộng (chưa expose hết trên UI):
 - [x] Cột **Chế độ BT / Routing** — `ScopeAutoEditor` per SKU + cột Dịch vụ (sku-mode); compact + ⋯ (Chỉ đề xuất / Tự động / Tự động theo khung giờ); overview tách `product_auto_action` / `scope_auto_action` / `auto_action` hiệu lực §9.5.2; Lưu riêng (không dùng Lưu hàng Ngưỡng).
 - [x] Bảng metric — scroll ngang nhẹ khi cần; `table-layout: fixed`, truncate + tooltip.
 - [x] `GET /incidents?page=&page_size=` — phân trang full-width; **không** route `/incidents/:id` trên UI.
-- [x] `ChatWidget` + `useChatDock` + `useVoiceInput`; panel lớn (~800px); voice watchdog + lệnh tắt mic; alias + tra BT direct §7.6.5 (`chatresolve`, `chat_maintenance`)
+- [x] `ChatWidget` + `useChatDock` + `useVoiceInput`; panel lớn (~800px); voice watchdog + lệnh tắt mic; alias + tra metric/BT direct §7.6.5 (`chatresolve`, `chat_metrics`, `chat_maintenance`, `chat_intent_stats`)
 - [x] `/settings` — card compact §9.5: scheduler + **thời lượng BT mặc định** (§9.5.5) + mock (`normalizeConfig` fallback 60); select kịch bản **full-width**.
 - [x] Dev: `web/dev.ps1`, `VITE_DEV_AUTH_BYPASS`, proxy Vite → API.
 - [ ] MSAL O365 production (`VITE_AAD_*`); §2.6 JWT middleware đầy đủ.
@@ -4437,7 +4493,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 **Tình huống:** Ops đang di chuyển, mở UI trên **điện thoại** sau khi scheduler sinh Incident #20260604-001 (ZING SKU 20k).
 
 1. UI feed hiển thị card Sự cố mức Cao — tap mở chi tiết.
-2. **Chat:** gõ *"Tình hình topup mobi?"* → alias `TOPUP_MOBI` §7.6.5 → `get_routing` + `get_metrics` (cả 3 provider) → tóm tắt tiếng Việt. Hoặc *"Tại sao ESALE 20k fail tăng?"* → `get_metrics` + `get_top_errors`. **Bảo trì:** *"Thẻ Garena có đang bảo trì?"* hoặc *"Thẻ Mobifone 10.000"* (follow-up) → direct reply §7.6.5.1 khớp nhãn BT Dashboard.
+2. **Chat:** gõ *"Tình hình topup mobi?"* → alias `TOPUP_MOBI` §7.6.5 → `get_routing` + `get_metrics` (cả 3 provider) → tóm tắt tiếng Việt. Hoặc *"Tại sao ESALE 20k fail tăng?"* → `get_metrics` + `get_top_errors`. **GD pending:** *"thẻ Mobifone 50.000 quay đơn có banding không"* → direct reply §7.6.5.2 (29 GD pending ESALE khớp cột Dashboard). **Bảo trì:** *"Thẻ Garena có đang bảo trì?"* hoặc *"Thẻ Mobifone 10.000"* (follow-up) → direct reply §7.6.5.1 khớp nhãn BT Dashboard.
 3. **Voice:** bật Mic, nói *"Đề xuất routing cho mệnh giá hai mươi nghìn"* → im lặng 2s → tự gửi `/chat` (mic vẫn bật, ô nhập clear) → Agent trả Routing Plan; hỏi tiếp không cần bật Mic lại; nói *"tắt mic"* hoặc bấm Mic để tắt.
 4. Trên **desktop** cùng tài khoản: Dashboard §9.0 — bảng routing (hàng con *Kế hoạch routing* dưới SKU) + bảng incidents + `ChatWidget` góc phải dưới (cùng dữ liệu).
 5. (Tuỳ chọn) Ops bấm **Duyệt** trên hàng kế hoạch (cột Bảo trì, căn phải) → UpdateRouting thực thi.
@@ -4711,6 +4767,7 @@ metrics_snapshot          (production metrics)
 
 config_audit_log          (agent_settings — admin, không rollback routing)
 provider_chat_escalation  notification_log
+chat_intent_stats         (FAQ intent hit count — §7.6.5.3)
 chat_sessions ── chat_messages
 users                     (cache O365/Entra ID profile — §2.6.9)
 ```
@@ -5176,6 +5233,8 @@ ORDER BY sku_code ASC, provider_code ASC, starts_at ASC;
 
 **Lọc in-window (Go — giống `GET /dashboard/overview`):** `!ends_at.Before(now) && !starts_at.After(now)` → **active**; `starts_at.After(now)` → **scheduled**; hết hạn → bỏ qua.
 
+**Chat §7.6.5.2:** `metricsForChat` dùng `GetMetricsInWindow` per provider (cửa sổ 15m) + `pending_txn`/`fail_txn` như `provider_metrics` overview.
+
 **Chat §7.6.5.1:** `maintenanceForChat` dùng `ListMaintenanceWindows(product, 'active')` + cùng bộ lọc Go như overview (không dùng `ends_at > NOW()` trong SQL).
 
 **Query tick lifecycle (worker mỗi phút):**
@@ -5239,6 +5298,18 @@ LIMIT 1;
 ### 13.9 Chat (UI on-demand)
 
 ```sql
+CREATE TABLE chat_intent_stats (
+  id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  intent_key      VARCHAR(64)  NOT NULL COMMENT 'maintenance, metrics, routing, ...',
+  pattern_hash    CHAR(24)     NOT NULL,
+  sample_message  VARCHAR(512) NOT NULL,
+  hit_count       INT UNSIGNED NOT NULL DEFAULT 1,
+  last_seen_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_chat_intent_pattern (intent_key, pattern_hash),
+  KEY idx_chat_intent_hits (intent_key, hit_count DESC, last_seen_at DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE chat_sessions (
   id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id         VARCHAR(64)  NOT NULL,
@@ -5804,7 +5875,7 @@ export const TOOLS_OPENAI = [
 ];
 ```
 
-**Lưu ý cho chat agent (§7.6.5):** Câu hỏi bảo trì → `tryChatMaintenanceReply` / `maintenanceForChat` (§7.6.5.1) **trước và thay** LLM. `get_maintenance` tool dùng cùng `maintenanceForChat`. Args qua `chatresolve.NormalizeToolArgs` (`NormalizeSKU`). Admin thêm 6 tool duyệt/từ chối — **không** expose trực tiếp `UpdateRouting` / `SetMaintenance`.
+**Lưu ý cho chat agent (§7.6.5):** Câu pending/metric → `tryChatMetricsReply` / `metricsForChat` (§7.6.5.2) **trước** bảo trì và **thay** LLM. Câu bảo trì → `tryChatMaintenanceReply` / `maintenanceForChat` (§7.6.5.1). `get_maintenance` tool dùng cùng `maintenanceForChat`; `get_metrics` dùng `GetMetrics` registry. Intent ghi `chat_intent_stats` (§7.6.5.3). Args qua `chatresolve.NormalizeToolArgs` (`NormalizeSKU`). Admin thêm 6 tool duyệt/từ chối — **không** expose trực tiếp `UpdateRouting` / `SetMaintenance`.
 
 ### 14.6 Checklist Tool Contracts
 

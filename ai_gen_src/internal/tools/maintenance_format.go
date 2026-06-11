@@ -88,6 +88,57 @@ func productSKUScopeLabel(product, skuFilter string) string {
 	return fmt.Sprintf("%s %s", product, skuFilter)
 }
 
+// FormatAllMaintenanceReply lists active maintenance across all products (chat global query).
+func FormatAllMaintenanceReply(out GetMaintenanceOutput) string {
+	if len(out.Active) == 0 && len(out.Scheduled) == 0 {
+		return "Hiện **không có dịch vụ nào** đang bảo trì hoặc scheduled."
+	}
+	if len(out.Active) == 0 {
+		return fmt.Sprintf("Chưa có bảo trì active; có **%d** cửa sổ scheduled trên các dịch vụ.", len(out.Scheduled))
+	}
+	byProduct := map[string]map[string][]string{}
+	for _, item := range out.Active {
+		prod := item.ProductCode
+		if prod == "" {
+			prod = "?"
+		}
+		sku := item.SKUCode
+		if sku == "" {
+			sku = "?"
+		}
+		if byProduct[prod] == nil {
+			byProduct[prod] = map[string][]string{}
+		}
+		prov := item.ProviderCode
+		if prov == "" {
+			prov = "?"
+		}
+		byProduct[prod][sku] = append(byProduct[prod][sku], fmt.Sprintf("%s (~%d phút)", prov, item.RemainingMinutes))
+	}
+	products := sortedStringKeysFlat(byProduct)
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Có **%d** dịch vụ đang bảo trì:\n", len(products)))
+	for _, prod := range products {
+		skus := sortedStringKeys(byProduct[prod])
+		parts := make([]string, 0, len(skus))
+		for _, sku := range skus {
+			sort.Strings(byProduct[prod][sku])
+			parts = append(parts, fmt.Sprintf("%s (%s)", sku, strings.Join(byProduct[prod][sku], ", ")))
+		}
+		b.WriteString(fmt.Sprintf("- **%s**: %s\n", prod, strings.Join(parts, "; ")))
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func sortedStringKeysFlat(m map[string]map[string][]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // FormatMaintenanceReply builds a Vietnamese answer from maintenance tool output.
 func FormatMaintenanceReply(product, skuFilter string, out GetMaintenanceOutput) string {
 	active := filterMaintenanceItems(out.Active, skuFilter)

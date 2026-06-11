@@ -35,10 +35,13 @@ Monorepo Go + MySQL cho **OpsOne** — spec: `../OpsOne.md`
 - `POST .../maintenance/extend` — **400** `no_change` khi gia hạn không đổi thời gian (`CountActiveMaintenanceForSKU`)
 - Endpoints: health-status, config, incidents (phân trang), scopes auto/routing/maintenance, maintenance, **`POST /chat` LLM agent §7.6.5** (stub keyword khi không có `LLM_API_KEY`), `/events`
 - **`internal/llm`** — OpenAI-compatible client (GreenNode AIP); **`internal/api/chat_agent.go`** — tool calling + session memory
+- **`internal/api/chat_metrics.go`** — `metricsForChat` + `tryChatMetricsReply` (§7.6.5.2): GD pending/success/fail khớp `provider_metrics` Dashboard; **không** fall-through LLM
 - **`internal/api/chat_maintenance.go`** — `maintenanceForChat` + `tryChatMaintenanceReply` (§7.6.5.1): cùng query/lọc như Dashboard; **không** fall-through LLM
-- **`internal/chatresolve`** — alias (`aliases.go`), intent BT (`intent.go`), SKU `10.000`→`10000` (`sku.go`)
-- **`internal/tools/maintenance_format.go`** — `FormatMaintenanceReply`, `EnrichMaintenanceOutput`
+- **`internal/chatresolve`** — alias (`aliases.go`), intent metrics/BT (`intent.go`), SKU `10.000`→`10000` (`sku.go`)
+- **`internal/tools/metrics_format.go`** — `FormatMetricsReply`, `BuildMetricsChatResult`
+- **`internal/tools/maintenance_format.go`** — `FormatMaintenanceReply`, `FormatAllMaintenanceReply`, `EnrichMaintenanceOutput`
 - **`internal/tools/maintenance_build.go`** — `MaintenanceInWindow`, `BuildMaintenanceOutput`, `FilterMaintenanceByProvider`
+- **`internal/store/chat_intent_stats.go`** — `BumpChatIntentStat` — thống kê câu hỏi thường gặp (§7.6.5.3)
 - Integration test: `$env:OPSONE_INTEGRATION=1; go test ./internal/api/... -v` — gồm `TestProductScopeAutoPutOverview`, `TestConfigPutMaintenanceDefaultDuration`
 
 ### Phase 6 — Frontend React ✅
@@ -56,7 +59,7 @@ Monorepo Go + MySQL cho **OpsOne** — spec: `../OpsOne.md`
 - **`Layout`** — logo ZaloPay header + favicon tab (`web/public/favicon.png`)
 - Chat widget — panel ~800×780px; nhãn **Bạn/OpsOne**; kéo dock 4 góc (`useChatDock`); resize 4 góc (`useChatResize`); auto-focus ô nhập khi mở
 - Voice `vi-VN` (`useVoiceInput`) — Mic toggle liên tục; im lặng **2s** → gửi; restart STT sau gửi (clear transcript); watchdog chống đơ; lệnh thoại *tắt mic* / *kết thúc cuộc trò chuyện*
-- Chat bảo trì §7.6.5.1 — *thẻ Garena*, *Mobifone 10.000*, follow-up session; LLM + alias §7.6.5; Admin duyệt khi yêu cầu rõ
+- Chat metric/BT §7.6.5.2–1 — *Mobifone 50.000 GD pending/banding*, *thẻ Garena*, *ngoài ra còn dịch vụ nào BT*; follow-up session; LLM + alias §7.6.5; Admin duyệt khi yêu cầu rõ
 - SSE `/events` + poll 60s fallback
 - Dev: `VITE_DEV_AUTH_BYPASS=true` (header `X-OpsOne-Role`); production: MSAL.js §2.6.4
 
@@ -107,7 +110,7 @@ $env:OPSONE_INTEGRATION="1"; go test ./... -v
 
 **LLM chat:** `LLM_API_KEY` + `LLM_MODEL=minimax/minimax-m2.5` trong `.env`. API tự đọc `.env` khi chạy từ `ai_gen_src/`; khuyến nghị `.\scripts\run-api.ps1`.
 
-**Chat alias & bảo trì:** `NormalizeToolArgs` + `NormalizeSKU`. Câu hỏi BT → `maintenanceForChat` (giống Dashboard `ListMaintenanceWindows` + `MaintenanceInWindow` trong Go). Deploy API sau đổi chat BT. Provider routing: `ESALE`, `IMEDIA`, `SHOPPAY`. Chi tiết: [`OpsOne.md` §7.6.5 / §7.6.5.1](../OpsOne.md).
+**Chat alias, metric & bảo trì:** `NormalizeToolArgs` + `NormalizeSKU`. Câu pending/metric → `metricsForChat` (giống `provider_metrics` Dashboard, cửa sổ 15m). Câu BT → `maintenanceForChat` (giống `ListMaintenanceWindows` + `MaintenanceInWindow`). Intent metrics **ưu tiên** trước BT — tránh nhầm *quay đơn/banding* thành bảo trì. `chat_intent_stats` ghi hit count the FAQ. Deploy API sau đổi chat. Provider routing: `ESALE`, `IMEDIA`, `SHOPPAY`. Chi tiết: [`OpsOne.md` §7.6.5 / §7.6.5.1–3](../OpsOne.md).
 
 ### Chạy workers + API
 
@@ -146,9 +149,11 @@ Chi tiết §15.2.2 trong `OpsOne.md` (MYSQL_DSN, không `allowPublicKeyRetrieva
 ai_gen_src/
 ├── cmd/api, worker-mock, worker-agent
 ├── internal/agent, api, chatresolve, llm, store, tools, …
+│   ├── api/chat_metrics.go           # metricsForChat — GD pending khớp Dashboard
 │   ├── api/chat_maintenance.go       # maintenanceForChat — khớp Dashboard
 │   ├── chatresolve/intent.go, sku.go
-│   └── tools/maintenance_format.go, maintenance_build.go
+│   ├── store/chat_intent_stats.go    # FAQ hit count
+│   └── tools/metrics_format.go, maintenance_format.go, maintenance_build.go
 ├── db/schema.sql, seed.sql
 ├── Dockerfile, Dockerfile.worker-*
 ├── scripts/run-api.ps1, dev.ps1, deploy-greennode*.ps1
@@ -159,4 +164,4 @@ ai_gen_src/
     └── pages/        # Dashboard, IncidentsPage, Settings, …
 ```
 
-Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §7.6.5 Chat LLM, **§7.6.5.1 Tra cứu BT**, §9 Chat/Voice, §9.0 Dashboard, §15.2.2 GreenNode deploy, §9.5 Cấu hình, §9.5.2 Chế độ BT / Routing.
+Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §7.6.5 Chat LLM, **§7.6.5.2 Metric/GD pending**, **§7.6.5.1 Tra cứu BT**, **§7.6.5.3 FAQ stats**, §9 Chat/Voice, §9.0 Dashboard, §15.2.2 GreenNode deploy, §9.5 Cấu hình, §9.5.2 Chế độ BT / Routing.

@@ -63,13 +63,23 @@ func (s *Server) tryChatMaintenanceReply(ctx context.Context, sessionID, userMsg
 
 	product := chatresolve.ExtractProductFromText(userMsg)
 	sku := chatresolve.ExtractSKUFromText(userMsg)
-	if product == "" {
+	if product == "" || !chatresolve.IsKnownProduct(product) {
 		product = chatresolve.ExtractProductFromHistory(hist)
 	}
 	if sku == "" {
 		sku = chatresolve.ExtractSKUFromHistory(hist)
 	}
+	if product != "" && !chatresolve.IsKnownProduct(product) {
+		product = ""
+	}
 	if product == "" {
+		if chatresolve.IsGlobalMaintenanceQuery(userMsg) || chatresolve.IsMaintenanceQuery(userMsg) {
+			out, err := s.maintenanceForChat(ctx, "", "")
+			if err != nil {
+				return fmt.Sprintf("Không tra được danh sách bảo trì: %s", err.Error()), true
+			}
+			return tools.FormatAllMaintenanceReply(out), true
+		}
 		return "Không nhận diện được dịch vụ — thử nêu rõ: *thẻ Garena*, *thẻ Mobifone 10.000*, *topup mobi*…", true
 	}
 

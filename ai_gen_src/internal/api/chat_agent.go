@@ -29,6 +29,17 @@ func chatSessionGet(sessionID string) []llm.Message {
 	return append([]llm.Message(nil), chatSessions.data[sessionID]...)
 }
 
+func (s *Server) recordChatIntentHit(intent chatresolve.ChatIntent, userMsg string) {
+	if intent == chatresolve.IntentUnknown {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = s.DB.BumpChatIntentStat(ctx, string(intent), userMsg)
+	}()
+}
+
 func chatSessionAppend(sessionID string, msgs ...llm.Message) {
 	if sessionID == "" {
 		return
@@ -200,6 +211,14 @@ func toolDef(name, desc string, params map[string]any) llm.ToolDef {
 }
 
 func (s *Server) chatAgentReply(ctx context.Context, sessionID, userMsg, actor string, isAdmin bool) (string, error) {
+	hist := chatHistoryTurns(sessionID)
+	intent := chatresolve.DetectChatIntent(userMsg, hist)
+	s.recordChatIntentHit(intent, userMsg)
+
+	if reply, ok := s.tryChatMetricsReply(ctx, sessionID, userMsg); ok {
+		chatSessionAppend(sessionID, llm.Message{Role: "user", Content: userMsg}, llm.Message{Role: "assistant", Content: reply})
+		return reply, nil
+	}
 	if reply, ok := s.tryChatMaintenanceReply(ctx, sessionID, userMsg); ok {
 		chatSessionAppend(sessionID, llm.Message{Role: "user", Content: userMsg}, llm.Message{Role: "assistant", Content: reply})
 		return reply, nil

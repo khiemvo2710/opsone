@@ -9,6 +9,7 @@ SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS
+  chat_intent_stats,
   chat_messages,
   chat_sessions,
   users,
@@ -436,6 +437,18 @@ CREATE TABLE agent_change_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 13.9 Chat
+CREATE TABLE chat_intent_stats (
+  id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  intent_key      VARCHAR(64)  NOT NULL COMMENT 'maintenance, metrics, routing, ...',
+  pattern_hash    CHAR(24)     NOT NULL,
+  sample_message  VARCHAR(512) NOT NULL,
+  hit_count       INT UNSIGNED NOT NULL DEFAULT 1,
+  last_seen_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_chat_intent_pattern (intent_key, pattern_hash),
+  KEY idx_chat_intent_hits (intent_key, hit_count DESC, last_seen_at DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE chat_sessions (
   id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id         VARCHAR(64)  NOT NULL,

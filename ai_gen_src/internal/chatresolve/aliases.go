@@ -212,6 +212,12 @@ var knownProductCodes = map[string]struct{}{
 	"TOPUP_VINA": {}, "TOPUP_MOBI": {}, "TOPUP_VIETTEL": {},
 }
 
+// IsKnownProduct reports whether code is a catalog product_code.
+func IsKnownProduct(code string) bool {
+	_, ok := knownProductCodes[strings.ToUpper(strings.TrimSpace(code))]
+	return ok
+}
+
 // CatalogHint builds a compact product/alias block for the chat system prompt.
 func CatalogHint(products []domain.Product) string {
 	var b strings.Builder
