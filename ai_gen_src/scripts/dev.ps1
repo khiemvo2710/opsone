@@ -101,3 +101,10 @@ function Add-OpsOneNodeToPath {
 }
 
 Write-Host "Loaded: Invoke-OpsOneReset (DROP+CREATE schema + seed), Invoke-OpsOneClearRuntime, Invoke-OpsOneTest, Invoke-OpsOneE2E, Start-OpsOneMock, Start-OpsOneAgent, Start-OpsOneWeb, Add-OpsOneNodeToPath"
+
+if ($MyInvocation.InvocationName -ne '.') {
+    Write-Host ''
+    Write-Host 'Luu y: ban vua chay .\dev.ps1 — cac ham se mat khi script ket thuc.' -ForegroundColor Yellow
+    Write-Host 'Dung:  . .\scripts\dev.ps1   (co dau cham dau, tu thu muc ai_gen_src)' -ForegroundColor Yellow
+    Write-Host 'Roi:   Invoke-OpsOneReset' -ForegroundColor Yellow
+}
