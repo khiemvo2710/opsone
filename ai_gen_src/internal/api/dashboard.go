@@ -98,16 +98,38 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 			item["live_metrics"] = snap.LiveMetrics
 		}
 
-		if ac, ok := scopeAutoByKey[k.maintKey()]; ok {
-			item["auto_action"] = ac.AutoAction
+		productAutoKey := store.ScopeAutoMapKey(k.product, "")
+		if ac, ok := scopeAutoByKey[productAutoKey]; ok {
+			item["product_auto_action"] = ac.AutoAction
 			if ac.WindowStart != "" {
-				item["window_start"] = ac.WindowStart
+				item["product_window_start"] = ac.WindowStart
 			}
 			if ac.WindowEnd != "" {
-				item["window_end"] = ac.WindowEnd
+				item["product_window_end"] = ac.WindowEnd
 			}
 		} else {
-			item["auto_action"] = "recommend_only"
+			item["product_auto_action"] = "recommend_only"
+		}
+
+		if ac, ok := scopeAutoByKey[store.ScopeAutoMapKey(k.product, k.sku)]; ok {
+			item["scope_auto_action"] = ac.AutoAction
+			if ac.WindowStart != "" {
+				item["scope_window_start"] = ac.WindowStart
+			}
+			if ac.WindowEnd != "" {
+				item["scope_window_end"] = ac.WindowEnd
+			}
+		} else {
+			item["scope_auto_action"] = "recommend_only"
+		}
+
+		effectiveAuto := store.ResolveEffectiveScopeAuto(scopeAutoByKey, k.product, k.sku)
+		item["auto_action"] = effectiveAuto.AutoAction
+		if effectiveAuto.WindowStart != "" {
+			item["window_start"] = effectiveAuto.WindowStart
+		}
+		if effectiveAuto.WindowEnd != "" {
+			item["window_end"] = effectiveAuto.WindowEnd
 		}
 
 		if mws, ok := maintByScope[k]; ok && len(mws) > 0 {
@@ -151,15 +173,7 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
-		scopeAuto := store.ScopeAutoConfig{
-			ProductCode: k.product,
-			SKUCode:     k.sku,
-			AutoAction:  "recommend_only",
-		}
-		if ac, ok := scopeAutoByKey[k.maintKey()]; ok {
-			scopeAuto = ac
-		}
-		manualApproval := !store.ShouldAutoApplyScope(scopeAuto, now)
+		manualApproval := !store.ShouldAutoApplyScope(effectiveAuto, now)
 
 		if !manualApproval && hasTh && !inActiveMaint && snap.AnyBreached {
 			inGrace := s.inReopenRecoveryGrace(ctx, k.product, k.sku, caches.latestCycleID)

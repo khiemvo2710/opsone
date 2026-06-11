@@ -221,7 +221,7 @@ Agent quét **toàn bộ product** trong catalog mỗi chu kỳ (hoặc subset p
 
 Mỗi **product** (dịch vụ) có bộ **ngưỡng riêng** trong `product_alert_thresholds` (§13.2.1). Khi metric **vượt ngưỡng** → OpsOne **đồng thời**:
 
-1. **Quyết định hành động** — routing (≥ 2 provider **active**) hoặc bảo trì (chỉ 1 provider **active**) theo rules + `routing_scope_state.auto_action` **per SKU** (§9.5.2) — xem §7.4 `suggested_action`.
+1. **Quyết định hành động** — routing (≥ 2 provider **active**) hoặc bảo trì (chỉ 1 provider **active**) theo rules + `routing_scope_state.auto_action` **hiệu lực** per scope (§9.5.2 — ưu tiên cấu hình **dịch vụ** `sku_code=""` trước, fallback **SKU**) — xem §7.4 `suggested_action`.
 2. **Gửi email** team vận hành (§8.9) — nếu `alert_email_enabled` và vượt ngưỡng.
 
 **Hai loại ngưỡng (OR — chỉ cần một vượt):**
@@ -492,20 +492,21 @@ opsone/
 │   │   ├── pages/
 │   │   │   ├── Dashboard.tsx       # bảng routing §9.0
 │   │   │   ├── IncidentsPage.tsx   # tab Sự cố — incidents phân trang
-│   │   │   ├── Settings.tsx        # §9.5 scheduler / mock (không ngưỡng; auto per SKU trên Dashboard)
+│   │   │   ├── Settings.tsx        # §9.5 scheduler + bảo trì mặc định + mock (compact card; ngưỡng/auto trên Dashboard)
 │   │   │   └── MaintenancePage.tsx
 │   │   ├── components/
 │   │   │   ├── Layout.tsx              # top-nav tabs + SSE + ChatWidget
 │   │   │   ├── ChatWidget.tsx          # chat nổi — kéo dock 4 góc (useChatDock)
 │   │   │   ├── HealthBadge.tsx         # 🟢🟡🔴 (+ compact icon-only)
 │   │   │   ├── ServiceOverviewTable.tsx # routing + bảo trì + cột provider (6 chỉ số) + hàng plan con + ngưỡng đầu nhóm
-│   │   │   ├── ProductThresholdEditor.tsx # ngưỡng per product — inline trong hàng Ngưỡng (§9.0)
+│   │   │   ├── ProductThresholdEditor.tsx # ngưỡng per product — hàng Ngưỡng cảnh báo (§9.5.3)
 │   │   │   ├── ProviderMetricCell.tsx   # 6 dòng metric/provider; inactive (routing 0%) + Mở lại; maintained → disabled + metric 0
 │   │   │   ├── RoutingPctEditor.tsx    # nhập % khi duyệt plan (hàng con, căn cột provider); sync draft khi API đổi
 │   │   │   ├── IncidentsTable.tsx      # bảng sự cố full-width + phân trang (§9.0)
-│   │   │   ├── ScopeAutoEditor.tsx     # Chế độ BT / Routing — compact + ⋯
+│   │   │   ├── ScopeAutoEditor.tsx     # Chế độ BT / Routing — compact + ⋯ (cột SKU + cột Dịch vụ §9.5.2)
 │   │   │   ├── ActiveMaintenanceCell.tsx # BT active — Mở lại dịch vụ + Gia hạn (Từ/Đến, §9.0.5)
-│   │   │   ├── ServiceMaintenanceButton.tsx # BT thủ công — nút「Bảo trì dịch vụ」cột Bảo trì (§9.0.6)
+│   │   │   ├── ServiceMaintenanceButton.tsx # BT thủ công — nút「Bảo trì dịch vụ」cột Bảo trì + cột Dịch vụ (§9.0.6–7)
+│   │   │   ├── ProductMaintenanceActions.tsx # BT active cấp dịch vụ — Mở lại / Gia hạn batch khi mọi SKU BT (§9.0.7)
 │   │   │   ├── SkuMaintenanceTimeLabel.tsx   # nhãn BT active 4 dòng dưới tên SKU (§9.0)
 │   │   │   ├── RedSkuScrollNav.tsx           # ▲ 🔴 1/N ▼ — điều hướng nhanh tới SKU đỏ
 │   │   │   └── MaintenanceCard.tsx
@@ -562,8 +563,8 @@ Base URL: `http://localhost:8080/api/v1`
 | GET    | `/dashboard/overview`          | `DashboardOverview`    | Bảng routing tất cả product/SKU + bảo trì + plan chờ §9.0 |
 | GET    | `/config`                      | `ConfigGet`            | `agent_settings` — scheduler, mock (không auto routing global) |
 | PUT    | `/config`                      | `ConfigPut`            | Admin; ghi `config_audit_log`                     |
-| PUT    | `/scopes/{product}/auto`       | `ScopeAutoPut`         | Topup provider-scope (`sku_code=""`) — `auto_action`, `window_*` |
-| PUT    | `/scopes/{product}/{sku}/auto`| `ScopeAutoPut`        | Per SKU — `auto_action`, `window_start`, `window_end` |
+| PUT    | `/scopes/{product}/auto`       | `ScopeAutoPut`         | Cấp **dịch vụ** (`sku_code=""`) — `auto_action`, `window_*`; áp dụng mọi SKU; nếu auto → `CancelPendingRoutingPlansForProduct` (§9.5.2) |
+| PUT    | `/scopes/{product}/{sku}/auto`| `ScopeAutoPut`        | Cấp **SKU** (fallback khi chưa cấu hình dịch vụ) — `auto_action`, `window_start`, `window_end` |
 | POST   | `/scopes/{product}/{sku}/routing/approve` | `ScopeRoutingApprove` | Duyệt đề xuất routing (synthetic `id=0` hoặc admin confirm) — body `{ "proposed_pct": {...}, "plan": {...} }` → `UpdateRouting` |
 | POST   | `/scopes/{product}/{sku}/routing/apply`   | `ScopeRoutingApply`   | Admin cập nhật routing thủ công tùy chỉnh — body `{ "proposed_pct": {...} }` → `UpdateRouting`, `trigger_type=manual_temp` (bảng `agent_change_log`; **không** dùng `admin_manual` — enum đó chỉ cho `maintenance_windows`) |
 | POST   | `/scopes/{product}/{sku}/routing/restore-baseline` | `ScopeRoutingRestoreBaseline` | **Mở lại** provider — áp `baseline_pct`; metric tham chiếu từ **chu kỳ Agent gần nhất** (`agent_analysis_history`), không snapshot live (provider `routing_pct=0` → metric 0); ghi `recovery_apply_cycle_id` — poll/agent auto **chờ chu kỳ tiếp theo** |
@@ -704,7 +705,9 @@ Base URL: `http://localhost:8080/api/v1`
 - `provider_metrics` (optional): map per provider — `% Routing`, `% Success`, `% Pending`, `% Fail`, `pending_txn`, `fail_txn`, `under_maintenance?` — dùng cho cột ESALE/IMEDIA/SHOPPAY §9.0. Provider `routing_pct=0` (hard cut) vẫn trả object metric **0**. Provider **đang bảo trì** (theo provider hoặc BT toàn SKU khi mọi provider active đều BT): snapshot trả metric **0**, `routing_pct` hiển thị **0**, `under_maintenance: true` — UI disabled (§9.0).
 - `live_metrics` (optional): snapshot gom scope — **legacy/audit**; UI dùng `provider_metrics`.
 - `health_status` **theo từng scope** (product × SKU): từ `buildScopeSnapshot()` — đánh giá consecutive breach trên **từng provider active** (§2.3.2). **Không** lấy `health_status_product` product-level.
-- `auto_action`, `window_start`, `window_end` (optional): cấu hình auto **per scope** từ `routing_scope_state`.
+- `auto_action`, `window_start`, `window_end` (optional): cấu hình auto **hiệu lực** cho scope — từ `ResolveEffectiveScopeAuto` (§9.5.2): nếu có row `routing_scope_state` với `sku_code=""` (cấu hình **dịch vụ**) → dùng giá trị đó cho mọi SKU thuộc product; ngược lại fallback row `(product_code, sku_code)`.
+- `product_auto_action`, `product_window_start`, `product_window_end` (optional): cấu hình **gốc** cấp dịch vụ (`sku_code=""`) — dùng cho `ScopeAutoEditor` cột **Dịch vụ**.
+- `scope_auto_action`, `scope_window_start`, `scope_window_end` (optional): cấu hình **gốc** cấp SKU — dùng cho `ScopeAutoEditor` cột **Bảo trì + Chế độ BT / Routing** (hiển thị giá trị đã lưu per SKU; **không** thay thế bởi cấu hình dịch vụ — xem §9.5.2).
 - `pending_plan`: tối đa **1 bản ghi DB** / scope (`status ∈ {pending_approve, draft}`) **hoặc** đề xuất **synthetic** (`suggested: true`, `id: 0`). **Không** trả khi `ShouldAutoApplyScope=true` (§9.5.2) hoặc scope có cửa sổ `maintenance` active. UI **Duyệt/Từ chối** cả hai loại (plan có `id` → `POST /routing-plans/{id}/…`; synthetic → `POST /scopes/{product}/{sku}/routing/…`). **Refresh trên poll:** mỗi `GET /dashboard/overview` — nếu còn plan DB và metric live vẫn vi phạm → `refreshPendingRoutingFromSnapshot` + `UPDATE routing_plans.plan_json`; hết vi phạm → `CancelPendingRoutingPlansForScope`. Agent (`reasoning.go`) auto apply hoặc `UpdatePendingRoutingPlanForScope` tùy `ShouldAutoApplyScope`.
 - `pending_maintenance` (optional): khi breach nhưng `suggested_action=maintenance` — **không** trả khi `ShouldAutoApplyScope=true`. Object `{ id?, provider_code?, scope_level?, reason, action_type, suggested? }`. Bảo trì **cả SKU** → `scope_level=true`. Duyệt gửi `starts_at` + `ends_at` (ISO); mặc định UI = now → now+60p. Sau **Từ chối** → poll tiếp theo có thể trả đề xuất synthetic mới (không ẩn theo thời gian).
 - `maintenance`: chỉ trả khi `starts_at ≤ now < ends_at` (tránh hiển thị *còn 0 phút* khi DB vẫn `active` nhưng đã hết hạn).
@@ -824,7 +827,7 @@ Query: `page` (1-based, mặc định 1), `page_size` (mặc định 10, max 50)
 | 8   | `cmd/worker-agent` — chạy nền                                   | Incident + health_status xuất hiện   |
 | 9   | `cmd/api` — REST                                                | `curl /health-status`                |
 | 10  | React Dashboard — bảng routing §9.0 + incidents + HealthBadge   | F5 sau `go run ./cmd/api`            |
-| 11  | React Dashboard — ngưỡng per product §9.5.3 + Auto per SKU §9.5.2 + metric live | §10.11                               |
+| 11  | React Dashboard — ngưỡng per product §9.5.3 + Auto per dịch vụ/SKU §9.5.2 + metric live | §10.11                               |
 | 12  | Scenario A–D — routing output                                   | §10.1–10.4                           |
 | 13  | React Chat + voice                                              | §10.5                                |
 | 14  | Scenario G mock + H icons                                       | §10.7–10.8                           |
@@ -1960,10 +1963,10 @@ Lấy **doanh thu bị ảnh hưởng**.
 | **Đề xuất**  | **0%** | 100%   |
 
 
-**Chế độ triển khai** — điều khiển **per scope** `(product_code, sku_code)` trên **Dashboard** (§9.5.2), lưu `routing_scope_state`; Agent đọc mỗi chu kỳ:
+**Chế độ triển khai** — điều khiển **per scope** `(product_code, sku_code)` và **cấp dịch vụ** `(product_code, sku_code="")` trên **Dashboard** (§9.5.2), lưu `routing_scope_state`; Agent + poll overview đọc **`ResolveEffectiveScopeAuto`** (dịch vụ trước, SKU sau):
 
 
-| `auto_action` (per SKU) | Hành vi routing + bảo trì (`ShouldAutoApplyScope`)                                 |
+| `auto_action` **hiệu lực** (§9.5.2) | Hành vi routing + bảo trì (`ShouldAutoApplyScope`) — từ cấu hình **dịch vụ** nếu có row `(product, "")`, else SKU |
 | ------------------------ | ---------------------------------------------------------------------------------- |
 | `recommend_only` (mặc định) | Sinh Routing Plan / đề xuất bảo trì — **không** gọi `UpdateRouting` / `SetMaintenance` |
 | `auto`                   | **Tự động** `UpdateRouting` hoặc `SetMaintenance` khi rules thỏa — **không** hiện hàng đề xuất trên Dashboard |
@@ -3480,7 +3483,7 @@ React 18 + Vite + TypeScript. Breakpoint: 768px / 1024px (§9.3).
 | ---------------- | ----------------- | --------------------------------------- |
 | `/`              | `Dashboard`       | §9.0 — bảng routing + health header |
 | `/incidents`     | `IncidentsPage`   | Sự cố gần đây — bảng phân trang full-width §9.0 |
-| `/settings`      | `Settings`        | §9.5 scheduler / mock (không chỉnh ngưỡng) |
+| `/settings`      | `Settings`        | §9.5 scheduler + thời lượng BT mặc định + mock (compact; không chỉnh ngưỡng/auto) |
 | `/maintenance`   | `MaintenancePage` | Danh sách cửa sổ bảo trì (trang riêng)          |
 
 
@@ -3507,7 +3510,7 @@ Tooltip tab: *Có kế hoạch routing chờ duyệt* hoặc *Ổn định / Đa
 
 **Điều hướng SKU đỏ** (`RedSkuScrollNav` — góc bảng): khi có ≥ 1 SKU `effectiveRowHealth=red`, hiện **▲** · **🔴** · **`1/N`** · **▼**; bấm ▲/▼ cuộn tới `#overview-scope-{product}:{sku}` (smooth + flash highlight). Icon 🔴 cạnh bộ đếm (compact `HealthBadge`).
 
-**Gom nhóm theo dịch vụ:** Các SKU cùng `product_code` (VD `DATA_VINA`: VNP20, VNP50, V50K, V100K) được **group** — cột **Dịch vụ** dùng `rowspan`, chỉ hiển thị **`product_label`** (VD *Data Mobifone* — không lộ `product_code`); **SKU sort tăng dần** (số: 10000→20000→50000→100000). Mỗi nhóm nằm trong `<tbody class="overview-table__product-group">` riêng — viền trên + nền nhẹ. Topup `routing_mode=provider` (một scope) vẫn một dòng như cũ.
+**Gom nhóm theo dịch vụ:** Các SKU cùng `product_code` (VD `DATA_VINA`: VNP20, VNP50, V50K, V100K) được **group** — cột **Dịch vụ** dùng `rowspan` cho hành động batch (§9.0.7, §9.5.2); **`product_label`** hiển thị trên **hàng Ngưỡng** (§9.5.3), không lặp trong ô `rowspan`. **SKU sort tăng dần** (số: 10000→20000→50000→100000). Mỗi nhóm nằm trong `<tbody class="overview-table__product-group">` riêng — viền trên + nền nhẹ. Cột **Dịch vụ** rộng (`min-width: 18rem`) — layout ngang: **Bảo trì** căn trái · **Chế độ BT / Routing** căn phải, căn **top** (`overview-table__product-cell-layout`). Topup `routing_mode=provider` (một scope) vẫn một dòng — `ScopeAutoEditor` ở cột điều khiển SKU (không lặp ở cột Dịch vụ).
 
 **Thứ tự hàng trong mỗi nhóm product:**
 
@@ -3517,12 +3520,11 @@ Tooltip tab: *Có kế hoạch routing chờ duyệt* hoặc *Ổn định / Đa
 
 | Cột | Nội dung |
 | --- | -------- |
-| Dịch vụ | Chỉ `product_label` — **một ô / nhóm SKU** (`rowspan`) |
+| Dịch vụ | **Một ô / nhóm SKU** (`rowspan`) — **không** lặp tên dịch vụ (tên ở hàng Ngưỡng). **Sku-mode** (≥2 SKU): trái — **Bảo trì dịch vụ** (`ServiceMaintenanceButton` batch SKU chưa BT) hoặc **Mở lại dịch vụ** + **Gia hạn bảo trì** (`ProductMaintenanceActions`, chỉ khi **mọi SKU** đang BT — §9.0.7); phải — **Chế độ BT / Routing** (`ScopeAutoEditor`, `skuCode=""`, §9.5.2). **Topup provider-mode:** ô trống (auto ở cột điều khiển SKU) |
 | SKU | Mã SKU (`fmtSku`); topup provider-mode hiển thị `—`. **Khi BT active:** gộp với TT (`colspan=2`) — tên SKU + nhãn thời gian **4 dòng** (`SkuMaintenanceTimeLabel`, §9.0.1) |
 | TT | Icon 🟢🟡🔴 — **`health_status` API** (consecutive §2.3.2): 🟡 = vi phạm lần 1; 🔴 = đủ chu kỳ liên tiếp hoặc có plan chờ duyệt; **gộp vào ô SKU** khi đang bảo trì (§2.3.2) |
 | **ESALE / IMEDIA / SHOPPAY** | Mỗi cột 6 dòng (`provider_metrics`): **% Routing** · **% Success** · **% Pending** · **% Fail** · **Pending** · **Fail** — đỏ/xanh theo ngưỡng khi `routing_pct>0`; provider `routing_pct=0` (hard cut) → muted + metric **0** (chỉ hiển thị) + **Mở lại** → hàng con *Mở lại provider* (§9.0); **Lưu** baseline → `restore-baseline` (metric chu kỳ Agent + grace); BT active → disabled, không **Mở lại** |
-| **Bảo trì** | **Chưa BT:** nút **Bảo trì dịch vụ** (`ServiceMaintenanceButton`) — mặc định **Từ/Đến** = now → now+60p → `POST .../maintenance/approve`. **Đang BT:** `ActiveMaintenanceCell` — **Mở lại dịch vụ** + **Gia hạn bảo trì** (inline **Từ/Đến**, **Lưu/Hủy**); **ẩn** nút BT thủ công khi có cửa sổ active |
-| **Chế độ BT / Routing** | `ScopeAutoEditor` — xem §9.5.2; `PUT /scopes/.../auto` |
+| **Bảo trì + Chế độ BT / Routing** | **Một ô** (`colspan=2`, `overview-table__scope-controls-cell`) — layout giống cột Dịch vụ: trái **Bảo trì** · phải **Chế độ BT / Routing**, căn top. **Chưa BT:** `ServiceMaintenanceButton` per SKU. **Đang BT:** `ActiveMaintenanceCell` (Mở lại / Gia hạn, grid 2 cột ngang). **`ScopeAutoEditor`** per SKU — §9.5.2; `PUT /scopes/{product}/{sku}/auto` |
 
 #### 9.0.1 Nhãn thời gian bảo trì active (cột SKU)
 
@@ -3555,7 +3557,7 @@ Khi `pending_maintenance` và chưa có cửa sổ bảo trì active (`ServiceOv
 | --- | --- |
 | 1–2 (SKU + TT) | Nhãn *Đề xuất bảo trì* — căn trái, giữa dọc |
 | 3–4 (ESALE + IMEDIA) | Lý do vàng (`maintenanceSuggestLabel`) — **1 dòng**, ellipsis + `title` |
-| 5 → cuối (SHOPPAY + Bảo trì + Chế độ) | **Từ** · **Đến** (`DateTimeLocalField` compact) · **Duyệt** · **Từ chối** — grid/flex một hàng, căn giữa dọc, chiều cao control **28px** |
+| 5 → cuối (SHOPPAY + điều khiển SKU `colspan=2`) | **Từ** · **Đến** (`DateTimeLocalField` compact) · **Duyệt** · **Từ chối** — grid/flex một hàng, căn giữa dọc, chiều cao control **28px** |
 
 - Mặc định **Từ/Đến** = now → now+60p; body approve `{ starts_at, ends_at }` (ISO).
 - Nhãn thời gian: **Từ** / **Đến** (không dùng *Bắt đầu* / *Kết thúc*).
@@ -3582,18 +3584,46 @@ Ví dụ: *Đã duyệt bảo trì Data Mobifone · VNP20 — cửa sổ bảo t
 Khi scope **chưa** có cửa sổ bảo trì active — cột **Bảo trì** hiện nút **Bảo trì dịch vụ** (ẩn khi `row.maintenance` active → thay bằng `ActiveMaintenanceCell`):
 
 1. Bấm **Bảo trì dịch vụ** → inline **Từ** · **Đến** (`DateTimeLocalField` compact) + **Lưu** / **Hủy** (class `service-maint-btn`).
-2. Mặc định **Từ/Đến** = `defaultMaintenanceWindow()` — now → now+60p (`maintenance_default_duration_min`).
+2. Mặc định **Từ/Đến** = `defaultMaintenanceWindow(duration)` — now → now + N phút (`maintenance_default_duration_min` từ §9.5.5; fallback UI **60**).
 3. **Lưu** hợp lệ → `POST /scopes/{product}/{sku}/maintenance/approve` body `{ reason, starts_at, ends_at }`; `reason` = `manualServiceMaintenanceReason()` (audit).
 4. Validate cửa sổ: `maintenanceWindowError()` — lỗi hiện inline trước **Lưu**.
 
-**Hàng「Ngưỡng」:**
+#### 9.0.7 Bảo trì / routing cấp dịch vụ (cột Dịch vụ)
 
-| Ô | Nội dung |
-| --- | --- |
-| Dịch vụ + SKU + TT (`colspan=3`) | Nhãn *Ngưỡng* + 5 input: % Success `≤` · % Pending `≥` · % Fail `≥` · Pending `≥` · Fail `≥` |
-| ESALE / IMEDIA / SHOPPAY | Ô trống |
-| Bảo trì | Email + **Lưu** (`PUT /products/{code}/thresholds`) |
-| Chế độ BT / Routing | Ô trống (cấu hình **per SKU**, không trên hàng Ngưỡng) |
+Khi nhóm SKU cùng `product_code` (`routing_mode=sku`, ≥2 dòng SKU) — ô **Dịch vụ** (`rowspan`) bổ sung hành động batch. Layout `overview-table__product-cell-layout`: **trái** (`product-cell-main`) hành động BT · **phải** (`product-cell-auto`) `ScopeAutoEditor` — căn **top**, một hàng ngang.
+
+**Chưa BT (còn ≥1 SKU chưa bảo trì):**
+
+- `ServiceMaintenanceButton` (`service-maint-btn--product`) — **Bảo trì dịch vụ** cho **danh sách SKU chưa BT** (`skuCodes[]` = mọi row `!isSkuUnderActiveMaintenance`).
+- **Lưu** → Dashboard gọi lần lượt `POST /scopes/{product}/{sku}/maintenance/approve` cho từng SKU (cùng cửa sổ Từ/Đến).
+- **Ẩn** `ProductMaintenanceActions` khi chưa phải mọi SKU đang BT.
+
+**Mọi SKU đang BT (`allSkusUnderMaintenance`):**
+
+- Điều kiện hiện `ProductMaintenanceActions` (`ServiceOverviewTable`):
+  - `group.rows.every(isSkuUnderActiveMaintenance)`;
+  - `productActiveScopes.length === group.rows.length` (mỗi row có `row.maintenance` active).
+- **Ẩn** `ServiceMaintenanceButton` batch (không còn SKU chưa BT).
+- **Mở lại dịch vụ** → batch `POST .../maintenance/reopen-service` cho từng SKU.
+- **Gia hạn bảo trì** → inline Từ/Đến + **Lưu** → batch `POST .../maintenance/extend` (cùng cửa sổ).
+- Nút **Mở lại** / **Gia hạn** per SKU vẫn có ở cột điều khiển SKU khi SKU đó đang BT.
+
+**Chế độ BT / Routing cấp dịch vụ:**
+
+- `ScopeAutoEditor` (`level="product"`, `skuCode=""`) — compact: nhãn *Chế độ BT / Routing* trên · badge + ⋯ dưới; `PUT /scopes/{product}/auto`.
+- **Lưu chế độ:** ⋯ → chọn chế độ → **Lưu** trong `ScopeAutoEditor` (cột Dịch vụ). **Không** dùng nút **Lưu** hàng *Ngưỡng cảnh báo* — nút đó chỉ `PUT /products/{code}/thresholds` (§9.5.3).
+- Lưu `routing_scope_state` với `sku_code=""`.
+- **Ưu tiên hiệu lực** (§9.5.2): `ResolveEffectiveScopeAuto` — row dịch vụ trước, fallback SKU.
+- **Topup** `routing_mode=provider` (một dòng, `sku_code=""`): **không** lặp editor ở cột Dịch vụ.
+
+**Hàng「Ngưỡng cảnh báo」** — chi tiết §9.5.3; tóm tắt cột:
+
+| Ô | `colspan` | Nội dung |
+| --- | --- | --- |
+| Dịch vụ | 1 | **`product_label`** căn giữa (`overview-table__threshold-product-name`) |
+| SKU + TT | 2 | Nhãn **Ngưỡng cảnh báo** |
+| Provider + Bảo trì | `providers.length + 1` | 5 cụm input — **bắt đầu thẳng cột Provider**; trải thêm sang cột **Bảo trì** để giãn cách (**không** đổi `colgroup` width cột Provider) |
+| Chế độ BT / Routing | 1 | Checkbox **Email** + **Lưu** ngưỡng (`PUT /products/{code}/thresholds`) — **không** lưu chế độ auto/routing |
 
 **Hàng con「Kế hoạch routing」** (`RoutingPctEditor` — compact/readOnly): provider không support → ô `—`; validate tổng 100% và mỗi provider **0–100%** trước Duyệt. **`GET /dashboard/overview`** (poll ~60s): nếu scope còn plan `pending_approve`/`draft` và metric live vẫn vi phạm → **tái tính `proposed_pct`** từ snapshot, `UPDATE routing_plans.plan_json`; nếu không còn vi phạm → hủy plan pending. UI sync draft khi `proposed_pct` API đổi.
 
@@ -3601,7 +3631,7 @@ Khi scope **chưa** có cửa sổ bảo trì active — cột **Bảo trì** hi
 | --- | -------- |
 | SKU + TT (`colspan=2`) | Nhãn *Kế hoạch routing* hoặc *Đề xuất routing* (`pending_plan.suggested`) |
 | ESALE / IMEDIA / SHOPPAY | Ô % đề xuất (hoặc read-only) **thẳng cột provider**; provider **không support** product/SKU → `—` |
-| Chế độ BT / Routing | **Duyệt** / **Từ chối** căn **phải**; lỗi validate (tổng ≠ 100%, ESALE 9%…) trên cột này. Plan DB: `POST /routing-plans/{id}/approve` body `{ "proposed_pct": {...} }`. Synthetic: `POST /scopes/{product}/{sku}/routing/approve` |
+| Bảo trì + Chế độ (`colspan=2`) | **Duyệt** / **Từ chối** căn **phải**; lỗi validate (tổng ≠ 100%, ESALE 9%…) trên cột này. Plan DB: `POST /routing-plans/{id}/approve` body `{ "proposed_pct": {...} }`. Synthetic: `POST /scopes/{product}/{sku}/routing/approve` |
 
 **Nút「Mở lại」provider** (`routing_pct=0`, không BT): mở hàng *Mở lại provider* — **Trả lại** điền `baseline_pct`; **Lưu** → `restore-baseline` (nếu = baseline, metric chu kỳ Agent + grace) hoặc `routing/apply` (`manual_temp` nếu admin sửa %).
 
@@ -3641,7 +3671,7 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
 
 | Chức năng              | Mô tả                                                                                |
 | ---------------------- | ------------------------------------------------------------------------------------ |
-| **Cấu hình**           | Admin chỉnh scheduler, mock (§9.5); **ngưỡng per product** + **auto per SKU** trên Dashboard |
+| **Cấu hình**           | Admin chỉnh scheduler, mock (§9.5); **ngưỡng per product** + **auto per dịch vụ / SKU** trên Dashboard |
 | **Trạng thái**         | Icon 🟢 / 🟡 / 🔴 — tổng quan sau mỗi chu kỳ phân tích (§8.2)                        |
 | **Bảng tổng quan**     | Routing hiện tại mọi product/SKU + bảo trì + 1 plan chờ/scope — refresh 60s + SSE   |
 | **Feed sự cố**         | Trang `/incidents` — bảng phân trang full-width (không drill-down)                  |
@@ -3651,7 +3681,7 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
 | **Thông báo email**    | Xem mail đã gửi; cấu hình nhóm chat provider (§8.9, §9.5.5)                          |
 
 
-> Scheduler **vẫn phân tích** theo chu kỳ đã cấu hình. **Auto per SKU** (§9.5.2) quyết định **có tự gọi UpdateRouting hay không**; trang Cấu hình chỉ đặt chu kỳ.
+> Scheduler **vẫn phân tích** theo chu kỳ đã cấu hình. **Auto per dịch vụ / SKU** (§9.5.2 — `ResolveEffectiveScopeAuto`) quyết định **có tự gọi UpdateRouting hay không**; trang Cấu hình chỉ đặt chu kỳ.
 
 ### 9.2 Hai kênh nhập lệnh
 
@@ -3733,7 +3763,7 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
                     └────────┬────────┘
                              │ đọc agent_config mỗi chu kỳ
   UI Cấu hình ───────────────┤ (scheduler interval, mock)
-  Dashboard (Auto per SKU) ──┤ (auto_action, window_*)
+  Dashboard (Auto dịch vụ/SKU) ──┤ (`ResolveEffectiveScopeAuto`, `auto_action`, `window_*`)
   User chat/voice ───────────┘
 ```
 
@@ -3742,7 +3772,8 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
 | ----------------------------------- | ------------------------------------------------------ |
 | `GET /config`                       | Đọc cấu hình scheduler + mock                          |
 | `PUT /config`                       | Admin lưu cấu hình (audit log bắt buộc)                |
-| `PUT /scopes/{product}/{sku}/auto`  | Lưu chế độ BT / Routing per SKU (§9.5.2)               |
+| `PUT /scopes/{product}/auto`       | Lưu chế độ BT / Routing **cấp dịch vụ** (`sku_code=""`) — áp dụng mọi SKU; nếu `ShouldAutoApplyScope` → `CancelPendingRoutingPlansForProduct` (§9.5.2) |
+| `PUT /scopes/{product}/{sku}/auto`  | Lưu chế độ BT / Routing **cấp SKU** (fallback khi chưa cấu hình dịch vụ) (§9.5.2)               |
 | `POST /scopes/{product}/{sku}/routing/approve`   | Duyệt đề xuất routing synthetic (§2.3)        |
 | `POST /scopes/{product}/{sku}/routing/apply`     | Cập nhật routing thủ công tùy chỉnh (`manual_temp`) |
 | `POST /scopes/{product}/{sku}/routing/restore-baseline` | Trả routing về `baseline_pct` — **Mở lại** provider (`manual_baseline`) |
@@ -3780,7 +3811,15 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
 
 ### 9.5 Bảng cấu hình Agent (UI Settings)
 
-Màn **Cấu hình** trên UI (admin; ops có thể **xem**). Lưu backend `agent_config` — scheduler và Agent đọc **mỗi chu kỳ**.
+Màn **Cấu hình** trên UI (admin; ops có thể **xem**). Lưu `PUT /config` → `agent_settings` — scheduler và Agent đọc **mỗi chu kỳ**.
+
+**Layout compact (`Settings.tsx` + `index.css`):**
+
+- Một card `.settings-card` — 3 nhóm `.settings-group`: **Scheduler** · **Bảo trì** · **Mock data** (phân cách `border-bottom`).
+- Trường thường: hàng ngang `.settings-row` — label trái · control phải; checkbox cùng hàng label.
+- **Kịch bản mock:** `.settings-row--select` — label trên · `<select>` **full-width** card (tránh cắt nhãn dài §4.5.3).
+- Input số `.settings-input--num` — rộng cố định ~4.25rem; trang `max-width: 40rem`.
+- Dòng dẫn ngắn: *Ngưỡng & chế độ Auto → Dashboard*; nút **Lưu cấu hình** dưới card.
 
 #### 9.5.1 Scheduler — chu kỳ phân tích
 
@@ -3799,19 +3838,53 @@ Màn **Cấu hình** trên UI (admin; ops có thể **xem**). Lưu backend `agen
 Chu kỳ phân tích:  [  5  ] phút     (min 1 — max 60)
 Scheduler:         [●] Bật  [ ] Tắt
 
-Nguồn dữ liệu:     (●) Mock (chạy thử)  ( ) Production
+Bảo trì
+  Thời lượng mặc định (phút)     [ 60 ]
+
 Mock data:         [●] Bật  [ ] Tắt
-Chu kỳ mock:       [  1  ] phút
-Kịch bản mock:     [ ESALE suy giảm — TOPUP_VINA + ZING SKU 20k ▼ ]
-                    (value gửi API: esale_degrading)
+Kịch bản:
+  [ Bình thường — nhiễu nhẹ, không sự cố lớn                    ▼ ]
+  (select full-width — nhãn dài không bị cắt)
+Nguồn: mock
 ```
 
 - Đổi chu kỳ → scheduler **áp dụng từ chu kỳ tiếp theo** (không chồng 2 job).
 - Hiển thị **lần chạy tiếp theo** / lần chạy cuối trên UI.
 
-#### 9.5.2 Chế độ BT / Routing — per SKU (Dashboard)
+#### 9.5.2 Chế độ BT / Routing — cấp dịch vụ + SKU (Dashboard)
 
-Cấu hình **từng scope** `(product_code, sku_code)` — cột **Chế độ BT / Routing** trên bảng §9.0. Lưu `routing_scope_state.auto_action`, `window_start`, `window_end`. API: `PUT /scopes/{product}/auto` (topup provider-level, `sku` rỗng) hoặc `PUT /scopes/{product}/{sku}/auto`.
+Cấu hình lưu `routing_scope_state.auto_action`, `window_start`, `window_end` — hai tầng:
+
+| Tầng | Key DB | API lưu | UI |
+| --- | --- | --- | --- |
+| **Dịch vụ** | `(product_code, sku_code="")` | `PUT /scopes/{product}/auto` | `ScopeAutoEditor` cột **Dịch vụ** (sku-mode, §9.0.7) |
+| **SKU** | `(product_code, sku_code)` | `PUT /scopes/{product}/{sku}/auto` | `ScopeAutoEditor` cột **Chế độ BT / Routing** |
+| **Topup provider** | `(product_code, sku_code="")` | `PUT /scopes/{product}/auto` | Một dòng — editor ở cột routing (không lặp cột Dịch vụ) |
+
+**Ưu tiên hiệu lực** (`ResolveEffectiveScopeAuto` — `internal/store/scope_auto.go`; poll `dashboard.go`; Agent `reasoning.go`):
+
+```text
+IF tồn tại row routing_scope_state (product, sku_code="")
+  → effective = cấu hình dịch vụ (áp dụng mọi SKU thuộc product)
+ELSE
+  → effective = cấu hình (product, sku_code) hoặc mặc định recommend_only
+```
+
+**Response `GET /dashboard/overview` (mỗi row SKU):**
+
+| Field | Ý nghĩa |
+| --- | --- |
+| `auto_action`, `window_*` | Cấu hình **hiệu lực** (`ResolveEffectiveScopeAuto` → `ShouldAutoApplyScope`, ẩn/hiện đề xuất) |
+| `product_auto_action`, `product_window_*` | Cấu hình **gốc** dịch vụ — `ScopeAutoEditor` cột Dịch vụ (`initial` từ `product_auto_action`) |
+| `scope_auto_action`, `scope_window_*` | Cấu hình **gốc** SKU — `ScopeAutoEditor` cột điều khiển SKU (`initial` từ `scope_auto_action`, fallback `auto_action` nếu thiếu) |
+
+**Backend assemble (`internal/api/dashboard.go`):** load `ListScopeAutoConfig` → map key `ScopeAutoMapKey(product, sku)` (`internal/store/scope_auto.go`). Mỗi row overview:
+
+1. `product_auto_action` ← lookup `(product, sku_code="")`; không có row → `"recommend_only"`.
+2. `scope_auto_action` ← lookup `(product, sku_code)`.
+3. `auto_action` ← `ResolveEffectiveScopeAuto` (dịch vụ **đã lưu** — kể cả `recommend_only` — ghi đè mọi SKU).
+
+> **Triển khai:** không dùng `MaintenanceScopeKey` / `maintKey()` cho auto — chỉ `ScopeAutoMapKey`. `PUT` và `GET` overview phải cùng phiên bản API (restart `cmd/api` sau đổi `dashboard.go`).
 
 
 | Giá trị `auto_action` | Nhãn UI (`ScopeAutoEditor`) | Hành vi Agent + Dashboard |
@@ -3825,6 +3898,8 @@ Cấu hình **từng scope** `(product_code, sku_code)` — cột **Chế độ 
 
 - Mặc định: hai dòng canh phải — `Chế độ BT / Routing` + badge giá trị (vd. **Tự động**); nút **⋯** mở form.
 - Form chỉnh: dropdown + khung giờ (nếu `time_window`) + **Lưu** / **Hủy**; label canh phải.
+- **Lưu:** `PUT /scopes/.../auto` → `patchOverviewCache` (React Query `dashboard-overview`) cập nhật `product_auto_action` / `scope_auto_action` + `auto_action` khi lưu cấp dịch vụ → `refetchQueries` đồng bộ server.
+- **Hai nút Lưu khác nhau:** hàng *Ngưỡng cảnh báo* = ngưỡng + email; `ScopeAutoEditor` = chế độ BT/routing (§9.5.3).
 
 **UI khi chọn Tự động theo khung giờ:** hai input datetime (Từ – Đến), ví dụ `08:00` – `22:00`. Hỗ trợ khung qua nửa đêm (VD `22:00`–`06:00`).
 
@@ -3838,9 +3913,11 @@ if auto_action == "time_window"             → apply chỉ khi now ∈ [window_
 
 **Dashboard API:** `GET /dashboard/overview` chỉ trả `pending_plan` / `pending_maintenance` khi `ShouldAutoApplyScope=false` cho scope đó.
 
+**`PUT /scopes/{product}/auto`:** sau lưu, nếu `ShouldAutoApplyScope(saved, now)=true` → `CancelPendingRoutingPlansForProduct` (hủy plan chờ mọi SKU).
+
 **`PUT /scopes/{product}/{sku}/auto`:** sau lưu, nếu `ShouldAutoApplyScope(saved, now)=true` → `CancelPendingRoutingPlansForScope` (xóa plan chờ cũ); poll overview tiếp theo auto apply.
 
-**Agent (`reasoning.go`):** routing — nếu `ShouldAutoApplyScope` và còn plan pending → hủy pending + auto apply; sau routing nếu `ShouldForceAutoMaintenance` → chain `SetMaintenance` cùng chu kỳ; maintenance — `SetMaintenance` (mặc định 60 phút) thay vì chỉ `InsertRecommendation`. Cùng bộ **force** như poll Dashboard.
+**Agent (`reasoning.go`):** đọc `ResolveEffectiveScopeAuto(product, sku)` — routing / maintenance theo cấu hình hiệu lực; nếu `ShouldAutoApplyScope` và còn plan pending → hủy pending + auto apply; sau routing nếu `ShouldForceAutoMaintenance` → chain `SetMaintenance` cùng chu kỳ; maintenance — `SetMaintenance` (mặc định 60 phút) thay vì chỉ `InsertRecommendation`. Cùng bộ **force** như poll Dashboard.
 
 **Force bypass gate chu kỳ** (`internal/agent/breach.go`; poll `scopeAutoApplyAllowed` + `autoApplyScopeFromSnapshot`):
 
@@ -3860,10 +3937,21 @@ if auto_action == "time_window"             → apply chỉ khi now ∈ [window_
 
 **Ngưỡng** cấu hình trên **Dashboard → bảng routing** (`ProductThresholdEditor` **đầu** mỗi nhóm `product_code`). Trang **Cấu hình** chỉ còn scheduler + mock — có dòng dẫn link sang Dashboard.
 
-**Layout `ProductThresholdEditor`:** **một hàng `<tr>`** đầu mỗi nhóm product — nhãn *Ngưỡng*; **5 ô input** S/P/F (%) và P/F (GD); cột provider trống; cột Bảo trì: Email + **Lưu**; cột Chế độ BT / Routing trống. `PUT /products/{code}/thresholds`.
+**Layout `ProductThresholdEditor`:** **một hàng `<tr class="overview-table__threshold-row">`** đầu mỗi nhóm — căn giữa dọc (`vertical-align: middle`) toàn hàng. Cấu trúc ô — §9.0.7 bảng hàng Ngưỡng.
 
+**5 cụm ngưỡng** (`overview-threshold-field`) — mỗi cụm: label · toán tử (`≤` / `≥`) · input; `flex: 0 0 auto` (không nén chồng chữ); giãn cách đều; đường phân cách nhẹ giữa nhóm **%** và nhóm **GD** (cụm thứ 4). Nhãn UI:
 
-| Trường UI                 | API field                 | Mặc định hệ thống | Mô tả |
+| Nhãn UI | API field | Mặc định | Toán tử |
+| ------- | --------- | -------- | ------- |
+| **% Success** | `success_rate_min_pct` | 80 | `≤` |
+| **% Pending** | `pending_rate_max_pct` | 15 | `≥` |
+| **% Fail** | `fail_rate_max_pct` | 10 | `≥` |
+| **Pending** (GD) | `pending_txn_count_max` | 5 | `≥` |
+| **Fail** (GD) | `fail_txn_count_max` | 50 | `≥` |
+
+**Email** + **Lưu** — cột Chế độ BT / Routing (hàng ngưỡng). `PUT /products/{code}/thresholds`. **Chỉ** ngưỡng + bật email — **không** lưu `auto_action` (chế độ → `ScopeAutoEditor` §9.5.2).
+
+| Trường UI (legacy / API)  | API field                 | Mặc định hệ thống | Mô tả |
 | ------------------------- | ------------------------- | ----------------- | ----- |
 | Success tối thiểu (%)     | `success_rate_min_pct`    | 80                | Dưới → cảnh báo |
 | Pending tối đa (%)        | `pending_rate_max_pct`    | 15                | Trên → cảnh báo |
@@ -3933,17 +4021,23 @@ Tổng đang chạy: 100 %  ✓
 
 #### 9.5.5 Bảo trì — thời lượng mặc định
 
+**UI (`Settings.tsx` — nhóm *Bảo trì* trong card §9.5):** `PUT /config` field `maintenance_default_duration_min` → `agent_settings.maintenance_default_duration_min`.
 
-| Trường UI                       | Kiểu          | Mặc định | Mô tả                                                                      |
-| ------------------------------- | ------------- | -------- | -------------------------------------------------------------------------- |
-| **Thời lượng bảo trì mặc định** | Number (phút) | `60`     | OpsOne dùng khi đề xuất `ends_at = starts_at + duration`                   |
-| **Tự động bảo trì**             | Toggle        | Tắt      | Bật → khi `active_provider_count == 1` (hoặc không có backup healthy) có thể `SetMaintenance` auto |
+
+| Trường UI (label ngắn)          | API field                         | Kiểu          | Mặc định | Mô tả                                                                      |
+| ------------------------------- | --------------------------------- | ------------- | -------- | -------------------------------------------------------------------------- |
+| **Thời lượng mặc định (phút)**  | `maintenance_default_duration_min` | Number (phút) | `60`     | Dashboard: `defaultMaintenanceWindow(duration)` khi mở form BT; Agent + poll overview auto: `ends_at = starts_at + duration` |
+| **Tự động bảo trì**             | `maintenance_auto_enabled`        | Toggle        | Tắt      | *(Chưa expose UI)* — bật → khi `active_provider_count == 1` có thể `SetMaintenance` auto |
 
 
 ```text
-Thời lượng bảo trì mặc định:  [ 60 ] phút
-Tự động bảo trì (1 provider active):  [ ] Bật  [●] Tắt
+Bảo trì
+  Thời lượng mặc định (phút)     [ 60 ]    ← input số hẹp, căn phải
 ```
+
+**Backend:** `NormalizeMaintenanceDefaultDurationMin` (`internal/store/settings.go`); `maintenanceDefaultDurationMin` trong API (`maintenance_helpers.go`, `reasoning.go`, `dashboard_suggest.go`).
+
+**Frontend:** `normalizeConfig()` — nếu API thiếu/0 → hiển thị **60**; `useMaintenanceDefaultDurationMin` (React Query `['config']`) — `ServiceMaintenanceButton`, `ServiceOverviewTable`.
 
 - Admin approve maintenance có thể **sửa** `starts_at` / `ends_at` trước khi lưu.
 - UI hiển thị countdown: *Còn 42 phút* đến `ends_at`.
@@ -3981,7 +4075,24 @@ Tự động bảo trì (1 provider active):  [ ] Bật  [●] Tắt
 
 #### 9.5.7 Schema `agent_config` (backend)
 
-`GET/PUT /config` — **không còn** `auto_routing_mode`. Auto routing cấu hình per SKU qua `PUT /scopes/.../auto`.
+`GET/PUT /config` — **không còn** `auto_routing_mode`. Auto routing cấu hình cấp **dịch vụ** (`PUT /scopes/{product}/auto`) và/hoặc **SKU** (`PUT /scopes/.../{sku}/auto`); hiệu lực theo §9.5.2.
+
+`GET/PUT /config` (triển khai phẳng — không nested):
+
+```json
+{
+  "scheduler_enabled": true,
+  "scheduler_interval_min": 5,
+  "data_source": "mock",
+  "mock_enabled": true,
+  "mock_interval_min": 1,
+  "mock_scenario": "normal",
+  "maintenance_default_duration_min": 60,
+  "agent_locale": "vi-VN"
+}
+```
+
+Schema mở rộng (chưa expose hết trên UI):
 
 ```json
 {
@@ -4056,9 +4167,10 @@ Tự động bảo trì (1 provider active):  [ ] Bật  [●] Tắt
 
 #### 9.5.8 Checklist UI Cấu hình
 
-- Form scheduler + mock; responsive (mobile: form stack).
+- [x] Một card compact — scheduler + bảo trì (§9.5.5) + mock; input số hẹp; **select kịch bản mock full-width** (`.settings-row--select`).
 - Chỉ **admin** được `PUT /config`; ops read-only.
-- Validate: `interval_minutes` 1–60; mock interval 1–5 phút.
+- Validate: `scheduler_interval_min` 1–60; `maintenance_default_duration_min` 1–255 (API **400** nếu ngoài khoảng); mock interval 1–5 phút.
+- Integration test: `TestConfigPutMaintenanceDefaultDuration`.
 - Audit log mỗi lần đổi config (ai, khi nào, before/after).
 - Ngưỡng dịch vụ — inline Dashboard §9.5.3 (không còn tab riêng trên Cấu hình).
 - Badge: *"Đang dùng MOCK DATA"* / *"Auto routing: …"* trên header UI.
@@ -4078,7 +4190,7 @@ Tự động bảo trì (1 provider active):  [ ] Bật  [●] Tắt
 - [x] **Health per provider (live)** — metric đỏ khi vượt ngưỡng; cột TT 🟡/🔴 theo `consecutive_cycles_required`.
 - [x] **Auto đề xuất routing/bảo trì (live)** — `scopeSuggestionFromSnapshot` khi `ShouldAct`; **ẩn** khi `ShouldAutoApplyScope=true`; refresh plan DB trên poll (`refreshPendingRoutingFromSnapshot`).
 - [x] **Kế hoạch routing — sync draft** — `ServiceOverviewTable` cập nhật `draftRouting` khi API trả `proposed_pct` mới (poll 60s).
-- [x] **Auto per SKU** — `ScopeAutoEditor` + `PUT /scopes/.../auto`; mặc định `recommend_only`.
+- [x] **Auto per dịch vụ + SKU** — `ScopeAutoEditor` cột Dịch vụ (`PUT /scopes/{product}/auto`) + cột SKU; `ResolveEffectiveScopeAuto` (dịch vụ trước); mặc định `recommend_only`.
 - [x] **1 sự cố mở / SKU** — Agent không `InsertIncident` trùng khi còn `status=open`.
 - [x] **Error event snapshot** — `SumErrorEventsAtRecordedAt` cùng `recorded_at` GetMetrics (§2.3.2); Agent collector + threshold dùng chung quy tắc.
 - [x] Header/logo **`useOverallHealth`** — 🔴 khi bất kỳ SKU/tab đỏ hoặc plan chờ.
@@ -4090,18 +4202,21 @@ Tự động bảo trì (1 provider active):  [ ] Bật  [●] Tắt
 - [x] **Hàng Đề xuất bảo trì** — layout cột 1–2 / 3–4 / 5→cuối; **Từ/Đến** compact; Duyệt/Từ chối cùng hàng (§9.0.3).
 - [x] **Toast scope** — `{product_label} · {SKU}` qua `scopeDisplayLabel` (§9.0.4).
 - [x] **Gia hạn BT** — **Từ/Đến** + Lưu; lỗi *Thời gian bảo trì không thay đổi* UI + API `no_change` (§9.0.5).
-- [x] **Bảo trì dịch vụ thủ công** — `ServiceMaintenanceButton` inline Từ/Đến + Lưu; mặc định 60p (§9.0.6).
-- [x] **Cột Dịch vụ** — chỉ `product_label` (ẩn `product_code`).
+- [x] **Bảo trì dịch vụ thủ công** — `ServiceMaintenanceButton` inline Từ/Đến + Lưu; mặc định N phút (§9.5.5); batch cột Dịch vụ (§9.0.7).
+- [x] **BT active cấp dịch vụ** — `ProductMaintenanceActions`: Mở lại / Gia hạn batch SKU **chỉ khi mọi SKU đang BT**; nút ngang grid 2 cột (§9.0.7).
+- [x] **Cột Dịch vụ** — hành động batch BT/routing (tên dịch vụ trên hàng Ngưỡng); layout trái/phải; `min-width: 18rem`.
+- [x] **Hàng Ngưỡng** — `product_label` · *Ngưỡng cảnh báo* · 5 cụm (%/GD) thẳng cột Provider · Email + Lưu (§9.5.3).
+- [x] **Cột điều khiển SKU** — gộp Bảo trì + Chế độ BT/Routing (`scope-controls-cell`, `colspan=2`).
 - [x] `GET /dashboard/overview` trả `service_type` mỗi row.
 - [x] Duyệt/từ chối inline + validate tổng 100%; banner phản hồi; % làm tròn 1 chữ số.
 - [x] **Đóng sự cố theo hành động** — duyệt → `resolved` + audit; từ chối → `acknowledged`; cột **Người xử lý** / **Thời gian xử lý**.
 - [x] **Recovery timeline** — +1 chu kỳ agent sau duyệt/auto → 🟡; +1 chu kỳ nữa nếu metric OK → 🟢 (`recovery_apply_cycle_id`).
 - [x] `ProductThresholdEditor` **đầu nhóm** — 5 input ngưỡng; **Lưu** (không còn dropdown Auto global).
-- [x] Cột **Chế độ BT / Routing** per SKU — `ScopeAutoEditor` compact + ⋯ (Chỉ đề xuất / Tự động / Tự động theo khung giờ).
+- [x] Cột **Chế độ BT / Routing** — `ScopeAutoEditor` per SKU + cột Dịch vụ (sku-mode); compact + ⋯ (Chỉ đề xuất / Tự động / Tự động theo khung giờ); overview tách `product_auto_action` / `scope_auto_action` / `auto_action` hiệu lực §9.5.2; Lưu riêng (không dùng Lưu hàng Ngưỡng).
 - [x] Bảng metric — scroll ngang nhẹ khi cần; `table-layout: fixed`, truncate + tooltip.
 - [x] `GET /incidents?page=&page_size=` — phân trang full-width; **không** route `/incidents/:id` trên UI.
 - [x] `ChatWidget` + `useChatDock` (kéo dock 4 góc) + `useVoiceInput` (Web Speech `vi-VN`); Enter gửi; auto-scroll feed.
-- [x] `/settings` scheduler + mock.
+- [x] `/settings` — card compact §9.5: scheduler + **thời lượng BT mặc định** (§9.5.5) + mock (`normalizeConfig` fallback 60); select kịch bản **full-width**.
 - [x] Dev: `web/dev.ps1`, `VITE_DEV_AUTH_BYPASS`, proxy Vite → API.
 - [ ] MSAL O365 production (`VITE_AAD_*`); §2.6 JWT middleware đầy đủ.
 - [x] Dashboard — `PUT /products/{code}/thresholds` qua `ProductThresholdEditor`; ngưỡng % + số GD fail (mặc định **50**) / pending (mặc định **5**); bật cảnh báo email.
@@ -4223,7 +4338,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 
 **Kết quả kỳ vọng:** Chat và voice cho cùng kết quả; UI usable trên mobile và PC.
 
-### 10.6 Kịch bản F — Scheduler & auto routing per SKU (UI)
+### 10.6 Kịch bản F — Scheduler & auto routing per dịch vụ / SKU (UI)
 
 **Tình huống:** Admin cấu hình trước giờ cao điểm.
 
@@ -4234,7 +4349,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 5. SKU `GARENA/10000` đặt **Tự động** → chu kỳ sau Agent tự routing/bảo trì; Dashboard **không** hiện hàng đề xuất (các SKU khác vẫn Chỉ đề xuất).
 6. Tắt **scheduler** → không còn phân tích định kỳ; ops vẫn hỏi qua chat/voice.
 
-**Kết quả kỳ vọng:** Chu kỳ từ Cấu hình; hành vi auto **theo từng SKU**, không global.
+**Kết quả kỳ vọng:** Chu kỳ từ Cấu hình; hành vi auto **theo dịch vụ (ưu tiên) hoặc SKU**, không global.
 
 ### 10.7 Kịch bản G — Mock data realtime + Agent chạy thử
 
@@ -4353,7 +4468,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 - Liệt kê provider cho từng product; **SKU thẻ** theo mệnh giá; **SKU topup data:** VNP20, VNP50, V50K, V100K
 - **Business set baseline routing** (§8.6 Pha A): nhập `baseline_pct` cho từng `(product, sku, provider)` — đây là quyết định kinh doanh, KHÔNG do Agent sinh; khi seed `traffic_pct = baseline_pct`.
 - Chọn `data_source`: `mock` (chạy thử) hoặc `production`
-- Mặc định mọi scope `auto_action=recommend_only` (seed `routing_scope_state`); admin đổi per SKU trên Dashboard (§9.5.2)
+- Mặc định mọi scope `auto_action=recommend_only` (seed `routing_scope_state` per SKU + topup provider); admin đổi **cấp dịch vụ** (`PUT /scopes/{product}/auto`) hoặc **cấp SKU** trên Dashboard (§9.5.2)
 
 ### Phase 1 — Mock Data + Scheduler
 
@@ -4392,7 +4507,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 - [x] Handlers §2.3: `health-status`, `dashboard/overview` (live đề xuất + ẩn khi `ShouldAutoApplyScope` + refresh pending plan), `config`, `PUT /scopes/.../auto`, `POST /scopes/.../routing/approve|apply|restore-baseline|reject`, `POST /scopes/.../maintenance/approve|reject|cancel|reopen-service|extend`, `incidents` phân trang, `routing-plans`, `recommendations/approve|reject`, `maintenance`, `notifications`, `products`, `metrics`, `mock`, `chat` (stub), SSE `/events`
 - [x] JSON **snake_case** — `internal/api/serialize.go`; config PUT `scheduler_interval_min`, …
 - [x] `DEV_AUTH_BYPASS` + header `X-OpsOne-Role` (dev); `POST .../approve`
-- [x] Integration test `internal/api/server_test.go` — health, config audit, incident get
+- [x] Integration test `internal/api/server_test.go` — health, config audit, incident get, `TestProductScopeAutoPutOverview`, `TestConfigPutMaintenanceDefaultDuration` (`maintenance_default_duration_min`)
 - [ ] O365 JWT middleware đầy đủ §2.6 (production)
 - [x] `PUT /products/{code}/thresholds`; maintenance approve/cancel (partial); `POST /notifications/test` (stub)
 
@@ -4403,7 +4518,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 - [x] **Dashboard §9.0** — `ServiceOverviewTable` (cột provider 6 chỉ số + hàng plan/bảo trì/**Mở lại provider**; Lưu baseline → `restore-baseline`), `IncidentsPage` phân trang full-width
 - [x] `ProviderMetricCell`, `scopeMetrics.ts`, `effectiveRowHealth`; `ProductThresholdEditor` ngưỡng inline
 - [x] `HealthBadge` compact, `MaintenancePage`, `ChatWidget` + voice
-- [x] Settings — `PUT /config` (scheduler, mock); ngưỡng §9.5.3 + **Auto per SKU** (`ScopeAutoEditor`) trên Dashboard
+- [x] `Settings` — card compact §9.5 (`PUT /config`: scheduler, `maintenance_default_duration_min`, mock); ngưỡng §9.5.3 + **Auto per dịch vụ / SKU** (`ScopeAutoEditor`) trên Dashboard
 - [x] `web/dev.ps1` — chạy UI khi PATH chưa có `npm` (Windows)
 - [ ] MSAL.js khi `VITE_AAD_*` (§2.6.4); form routing `set_as_baseline` §9.5.4.1
 - [ ] E2E kịch bản **E, F, G, H** đầy đủ (→ Phase 7)
@@ -4632,6 +4747,8 @@ CREATE TABLE routing_scope_state (
 - `recovery_apply_cycle_id`: set khi `UpdateRouting` (`admin_approve` / `auto`); xóa khi health 🟢 sau chu kỳ +2.
 
 ### 13.4 Cấu hình Agent (UI Settings)
+
+`GET/PUT /config` (triển khai) expose: `scheduler_*`, `mock_*`, `maintenance_default_duration_min` (§9.5.5). Các cột `notification_*`, `maintenance_auto_enabled` — schema có, UI chưa.
 
 ```sql
 CREATE TABLE agent_settings (

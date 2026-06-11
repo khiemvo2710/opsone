@@ -21,6 +21,17 @@ func scopeAutoKey(product, sku string) string {
 	return product + "\x00" + sku
 }
 
+// ScopeAutoMapKey is the map key for scope auto config lookups (product + sku).
+func ScopeAutoMapKey(product, sku string) string {
+	return scopeAutoKey(product, sku)
+}
+
+// ProductScopeAutoConfigured reports whether product-level auto (sku_code="") is saved.
+func ProductScopeAutoConfigured(scopeAutoByKey map[string]ScopeAutoConfig, product string) bool {
+	_, ok := scopeAutoByKey[scopeAutoKey(product, "")]
+	return ok
+}
+
 // NormalizeScopeAutoAction maps legacy values to recommend_only | auto | time_window.
 func NormalizeScopeAutoAction(v string) string {
 	switch v {
@@ -69,6 +80,52 @@ func InAutoTimeWindow(now time.Time, start, end string) bool {
 		return false
 	}
 	return !now.Before(st) && now.Before(en)
+}
+
+// ScopeAutoRowExists reports whether routing_scope_state has a row for the scope.
+func (db *DB) ScopeAutoRowExists(ctx context.Context, product, sku string) (bool, error) {
+	const query = `
+		SELECT 1 FROM routing_scope_state
+		WHERE product_code = ? AND sku_code = ?
+		LIMIT 1`
+	var one int
+	err := db.QueryRowContext(ctx, query, product, sku).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("scope auto exists: %w", err)
+	}
+	return true, nil
+}
+
+// ResolveEffectiveScopeAuto returns product-level config when configured, else sku-level.
+func ResolveEffectiveScopeAuto(scopeAutoByKey map[string]ScopeAutoConfig, product, sku string) ScopeAutoConfig {
+	if sku != "" && ProductScopeAutoConfigured(scopeAutoByKey, product) {
+		return scopeAutoByKey[scopeAutoKey(product, "")]
+	}
+	if ac, ok := scopeAutoByKey[scopeAutoKey(product, sku)]; ok {
+		return ac
+	}
+	return ScopeAutoConfig{
+		ProductCode: product,
+		SKUCode:     sku,
+		AutoAction:  "recommend_only",
+	}
+}
+
+// ResolveEffectiveScopeAuto loads effective auto config for one scope (product priority, then SKU).
+func (db *DB) ResolveEffectiveScopeAuto(ctx context.Context, product, sku string) (ScopeAutoConfig, error) {
+	if sku != "" {
+		exists, err := db.ScopeAutoRowExists(ctx, product, "")
+		if err != nil {
+			return ScopeAutoConfig{}, err
+		}
+		if exists {
+			return db.GetScopeAutoConfig(ctx, product, "")
+		}
+	}
+	return db.GetScopeAutoConfig(ctx, product, sku)
 }
 
 // ShouldAutoApplyScope returns true when agent may apply routing without admin approve.

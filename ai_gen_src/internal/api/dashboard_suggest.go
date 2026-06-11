@@ -816,8 +816,9 @@ func (s *Server) autoApplyMaintenanceForScope(
 	if len(targets) == 0 {
 		return false, nil
 	}
+	defaultMin := maintenanceDefaultDurationMin(ctx, s.DB)
 	startsAt := time.Now()
-	endsAt := startsAt.Add(60 * time.Minute)
+	endsAt := startsAt.Add(time.Duration(defaultMin) * time.Minute)
 	_, err = applyMaintenanceTargets(
 		ctx, s.Tools, product, sku, "opsone-api",
 		fmt.Sprintf("auto maintenance scope %s/%s", product, sku),

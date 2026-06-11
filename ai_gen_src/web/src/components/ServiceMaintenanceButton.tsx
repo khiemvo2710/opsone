@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import type { ScopeMaintenancePayload } from './ServiceOverviewTable';
+import type { ProductMaintenancePayload, ScopeMaintenancePayload } from './ServiceOverviewTable';
 import { DateTimeLocalField } from './DateTimeLocalField';
+import { useMaintenanceDefaultDurationMin } from '../hooks/useMaintenanceDefaultDurationMin';
 import {
   defaultMaintenanceWindow,
   maintenanceWindowError,
@@ -10,14 +11,28 @@ import {
 
 interface Props {
   productCode: string;
-  skuCode: string;
+  /** Bảo trì một SKU (mặc định). */
+  skuCode?: string;
+  /** Bảo trì toàn bộ SKU của sản phẩm — dùng cùng onStartProduct. */
+  skuCodes?: string[];
   busy?: boolean;
-  onStart: (payload: ScopeMaintenancePayload) => void;
+  onStart?: (payload: ScopeMaintenancePayload) => void;
+  onStartProduct?: (payload: ProductMaintenancePayload) => void;
 }
 
-export function ServiceMaintenanceButton({ productCode, skuCode, busy = false, onStart }: Props) {
+export function ServiceMaintenanceButton({
+  productCode,
+  skuCode,
+  skuCodes,
+  busy = false,
+  onStart,
+  onStartProduct,
+}: Props) {
+  const durationMin = useMaintenanceDefaultDurationMin();
+  const isProductScope = Boolean(skuCodes && skuCodes.length > 0 && onStartProduct);
+  const targetSkus = isProductScope ? skuCodes! : skuCode != null ? [skuCode] : [];
   const [open, setOpen] = useState(false);
-  const [window, setWindow] = useState(defaultMaintenanceWindow);
+  const [window, setWindow] = useState(() => defaultMaintenanceWindow(durationMin));
 
   useEffect(() => {
     if (!busy) {
@@ -29,34 +44,49 @@ export function ServiceMaintenanceButton({ productCode, skuCode, busy = false, o
   const iso = windowErr ? null : maintenanceWindowISO(window.startsAt, window.endsAt);
 
   const startEdit = () => {
-    setWindow(defaultMaintenanceWindow());
+    setWindow(defaultMaintenanceWindow(durationMin));
     setOpen(true);
   };
 
   const cancelEdit = () => {
     setOpen(false);
-    setWindow(defaultMaintenanceWindow());
+    setWindow(defaultMaintenanceWindow(durationMin));
   };
 
   const confirm = () => {
-    if (!iso) return;
-    onStart({
+    if (!iso || targetSkus.length === 0) return;
+    const reason = manualServiceMaintenanceReason();
+    if (isProductScope) {
+      onStartProduct!({
+        productCode,
+        skuCodes: targetSkus,
+        reason,
+        startsAt: iso.starts_at,
+        endsAt: iso.ends_at,
+      });
+      return;
+    }
+    onStart!({
       productCode,
-      skuCode,
-      reason: manualServiceMaintenanceReason(),
+      skuCode: targetSkus[0],
+      reason,
       startsAt: iso.starts_at,
       endsAt: iso.ends_at,
     });
   };
 
+  const triggerTitle = isProductScope
+    ? `Lên lịch bảo trì toàn bộ ${targetSkus.length} SKU`
+    : 'Lên lịch bảo trì SKU';
+
   if (!open) {
     return (
-      <div className="service-maint-btn">
+      <div className={`service-maint-btn${isProductScope ? ' service-maint-btn--product' : ''}`}>
         <button
           type="button"
           className="btn btn--ghost btn--xs service-maint-btn__trigger"
-          disabled={busy}
-          title="Lên lịch bảo trì SKU"
+          disabled={busy || targetSkus.length === 0}
+          title={targetSkus.length === 0 ? 'Tất cả SKU đang bảo trì' : triggerTitle}
           onClick={startEdit}
         >
           Bảo trì dịch vụ
@@ -66,8 +96,12 @@ export function ServiceMaintenanceButton({ productCode, skuCode, busy = false, o
   }
 
   return (
-    <div className="service-maint-btn service-maint-btn--open">
-      <span className="service-maint-btn__label muted">Bảo trì dịch vụ</span>
+    <div
+      className={`service-maint-btn service-maint-btn--open${isProductScope ? ' service-maint-btn--product' : ''}`}
+    >
+      <span className="service-maint-btn__label muted">
+        {isProductScope ? `Bảo trì dịch vụ (${targetSkus.length} SKU)` : 'Bảo trì dịch vụ'}
+      </span>
       <div className="service-maint-btn__window">
         <DateTimeLocalField
           label="Từ"

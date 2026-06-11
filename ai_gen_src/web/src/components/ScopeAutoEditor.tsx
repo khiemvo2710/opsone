@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiClientError } from '../api/client';
 import { useToast } from '../context/ToastContext';
+import type { DashboardOverview } from '../types/api';
 import { DateTimeLocalField } from './DateTimeLocalField';
 import {
   datetimeRangeError,
@@ -25,6 +26,8 @@ interface Props {
   productCode: string;
   skuCode: string;
   initial: ScopeAutoState;
+  /** product = cấu hình toàn dịch vụ; sku = cấu hình từng SKU */
+  level?: 'product' | 'sku';
 }
 
 function scopeAutoPath(productCode: string, skuCode: string): string {
@@ -51,7 +54,12 @@ function summaryTitle(initial: ScopeAutoState): string | undefined {
   return `${start} → ${end}`;
 }
 
-export function ScopeAutoEditor({ productCode, skuCode, initial }: Props) {
+export function ScopeAutoEditor({
+  productCode,
+  skuCode,
+  initial,
+  level = 'sku',
+}: Props) {
   const qc = useQueryClient();
   const { showToast } = useToast();
   const [editing, setEditing] = useState(false);
@@ -71,15 +79,52 @@ export function ScopeAutoEditor({ productCode, skuCode, initial }: Props) {
     setEditing(false);
   }, [initial.auto_action, initial.window_start, initial.window_end]);
 
+  const patchOverviewCache = (saved: ScopeAutoState) => {
+    qc.setQueryData<DashboardOverview>(['dashboard-overview'], (old) => {
+      if (!old?.rows?.length) return old;
+      const rows = old.rows.map((row) => {
+        if (row.product_code !== productCode) return row;
+        if (skuCode === '') {
+          return {
+            ...row,
+            product_auto_action: saved.auto_action,
+            product_window_start: saved.window_start,
+            product_window_end: saved.window_end,
+            auto_action: saved.auto_action,
+            window_start: saved.window_start,
+            window_end: saved.window_end,
+          };
+        }
+        if (row.sku_code !== skuCode) return row;
+        return {
+          ...row,
+          scope_auto_action: saved.auto_action,
+          scope_window_start: saved.window_start,
+          scope_window_end: saved.window_end,
+        };
+      });
+      return { ...old, rows };
+    });
+  };
+
   const save = useMutation({
     mutationFn: (body: ScopeAutoState) =>
-      api<ScopeAutoState>(scopeAutoPath(productCode, skuCode), {
-        method: 'PUT',
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () => {
+      api<ScopeAutoState & { product_code?: string; sku_code?: string }>(
+        scopeAutoPath(productCode, skuCode),
+        {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        },
+      ),
+    onSuccess: async (saved) => {
       setEditing(false);
-      void qc.invalidateQueries({ queryKey: ['dashboard-overview'] });
+      const normalized: ScopeAutoState = {
+        auto_action: saved.auto_action,
+        window_start: saved.window_start,
+        window_end: saved.window_end,
+      };
+      patchOverviewCache(normalized);
+      await qc.refetchQueries({ queryKey: ['dashboard-overview'] });
       showToast('ok', 'Đã lưu chế độ Auto');
     },
     onError: (err: Error) => {
@@ -118,23 +163,31 @@ export function ScopeAutoEditor({ productCode, skuCode, initial }: Props) {
 
   const savedAction = normalizeAction(initial.auto_action);
   const savedLabel = actionDisplayLabel(savedAction);
+  const scopeHint =
+    level === 'product'
+      ? 'Chế độ xử lý tự động cho toàn bộ dịch vụ'
+      : 'Chế độ xử lý tự động cho SKU này';
+  const saveHint =
+    level === 'product' ? 'Lưu chế độ Auto cho dịch vụ' : 'Lưu chế độ Auto cho SKU';
 
   if (!editing) {
     return (
       <div className="scope-auto-editor scope-auto-editor--compact">
-        <div className="scope-auto-editor__summary" title={summaryTitle(initial)}>
-          <span className="scope-auto-editor__summary-label muted">Chế độ BT / Routing</span>
-          <span className="scope-auto-editor__summary-value">{savedLabel}</span>
+        <span className="scope-auto-editor__summary-label muted">Chế độ BT / Routing</span>
+        <div className="scope-auto-editor__summary-actions">
+          <span className="scope-auto-editor__summary-value" title={summaryTitle(initial)}>
+            {savedLabel}
+          </span>
+          <button
+            type="button"
+            className="btn btn--ghost btn--xs scope-auto-editor__more"
+            aria-label="Chỉnh sửa chế độ bảo trì / routing"
+            title="Chỉnh sửa"
+            onClick={startEdit}
+          >
+            ⋯
+          </button>
         </div>
-        <button
-          type="button"
-          className="btn btn--ghost btn--xs scope-auto-editor__more"
-          aria-label="Chỉnh sửa chế độ bảo trì / routing"
-          title="Chỉnh sửa"
-          onClick={startEdit}
-        >
-          ⋯
-        </button>
       </div>
     );
   }
@@ -146,7 +199,7 @@ export function ScopeAutoEditor({ productCode, skuCode, initial }: Props) {
         <select
           className="scope-auto-editor__select"
           value={action}
-          title="Chế độ xử lý tự động cho SKU này"
+          title={scopeHint}
           onChange={(e) => setAction(e.target.value)}
         >
           {AUTO_ACTIONS.map((a) => (
@@ -182,7 +235,7 @@ export function ScopeAutoEditor({ productCode, skuCode, initial }: Props) {
           type="button"
           className="btn btn--primary btn--xs"
           disabled={save.isPending || Boolean(windowErr)}
-          title="Lưu chế độ Auto cho SKU"
+          title={saveHint}
           onClick={onSave}
         >
           {save.isPending ? '…' : 'Lưu'}

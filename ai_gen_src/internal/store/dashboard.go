@@ -67,6 +67,16 @@ func (db *DB) CancelPendingRoutingPlansForScope(ctx context.Context, productCode
 	return err
 }
 
+// CancelPendingRoutingPlansForProduct cancels pending routing plans for every SKU under a product.
+func (db *DB) CancelPendingRoutingPlansForProduct(ctx context.Context, productCode string) error {
+	_, err := db.ExecContext(ctx, `
+		UPDATE routing_plans SET status = 'cancelled'
+		WHERE product_code = ? AND status IN ('pending_approve', 'draft')`,
+		productCode,
+	)
+	return err
+}
+
 // HasPendingMaintenanceRecommendation reports open maintenance suggestion for scope (24h).
 func (db *DB) HasPendingMaintenanceRecommendation(ctx context.Context, productCode, skuCode string) (bool, error) {
 	_, ok, err := db.LatestPendingMaintenanceForScope(ctx, productCode, skuCode)

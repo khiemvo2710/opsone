@@ -84,6 +84,69 @@ func TestIncidentGetByID(t *testing.T) {
 	}
 }
 
+func TestProductScopeAutoPutOverview(t *testing.T) {
+	srv := testServer(t)
+	putBody := strings.NewReader(`{"auto_action":"auto"}`)
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/scopes/GARENA/auto", putBody)
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("X-OpsOne-Role", "admin")
+	putRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put product auto: %d %s", putRec.Code, putRec.Body.String())
+	}
+
+	ovReq := httptest.NewRequest(http.MethodGet, "/api/v1/dashboard/overview", nil)
+	ovReq.Header.Set("X-OpsOne-Role", "admin")
+	ovRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(ovRec, ovReq)
+	if ovRec.Code != http.StatusOK {
+		t.Fatalf("overview: %d %s", ovRec.Code, ovRec.Body.String())
+	}
+	var ov struct {
+		Rows []map[string]any `json:"rows"`
+	}
+	if err := json.Unmarshal(ovRec.Body.Bytes(), &ov); err != nil {
+		t.Fatal(err)
+	}
+	var garena map[string]any
+	for _, row := range ov.Rows {
+		if row["product_code"] == "GARENA" && row["sku_code"] == "10000" {
+			garena = row
+			break
+		}
+	}
+	if garena == nil {
+		t.Fatal("GARENA 10000 row not found")
+	}
+	if garena["product_auto_action"] != "auto" {
+		t.Fatalf("product_auto_action=%v want auto", garena["product_auto_action"])
+	}
+	if garena["auto_action"] != "auto" {
+		t.Fatalf("effective auto_action=%v want auto", garena["auto_action"])
+	}
+}
+
+func TestConfigPutMaintenanceDefaultDuration(t *testing.T) {
+	srv := testServer(t)
+	putBody := strings.NewReader(`{"maintenance_default_duration_min":90}`)
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/config", putBody)
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq.Header.Set("X-OpsOne-Role", "admin")
+	putRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put config duration: %d %s", putRec.Code, putRec.Body.String())
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(putRec.Body.Bytes(), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["maintenance_default_duration_min"] != float64(90) {
+		t.Fatalf("maintenance_default_duration_min=%v want 90", cfg["maintenance_default_duration_min"])
+	}
+}
+
 func TestConfigPutAudit(t *testing.T) {
 	srv := testServer(t)
 	body := strings.NewReader(`{"scheduler_interval_min":5}`)

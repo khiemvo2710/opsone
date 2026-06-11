@@ -40,9 +40,15 @@ interface Props {
   providers: string[];
   /** Từ overview.thresholds — bỏ qua GET riêng khi đã có. */
   threshold?: ProductThreshold;
+  productLabel?: string;
 }
 
-export function ProductThresholdEditor({ productCode, providers, threshold }: Props) {
+export function ProductThresholdEditor({
+  productCode,
+  providers,
+  threshold,
+  productLabel,
+}: Props) {
   const qc = useQueryClient();
   const { showToast } = useToast();
   const [draft, setDraft] = useState<ProductThreshold | null>(
@@ -80,13 +86,37 @@ export function ProductThresholdEditor({ productCode, providers, threshold }: Pr
     },
   });
 
-  const totalCols = 3 + providers.length + 2;
+  const labelColSpan = 2;
+  /** Dùng thêm cột maint (không đổi width cột provider trong colgroup). */
+  const fieldsColSpan = providers.length + 1;
+  const actionsColSpan = 1;
+  const label = productLabel?.trim() || productCode;
+
+  const productTitleCell = (
+    <td className="overview-table__threshold-spacer">
+      <span className="overview-table__threshold-product-name" title={label}>
+        {label}
+      </span>
+    </td>
+  );
+
+  const thresholdLabelCell = (
+    <td colSpan={labelColSpan} className="overview-table__threshold-label-cell">
+      <span className="overview-threshold-band__title" title="Ngưỡng cảnh báo">
+        Ngưỡng cảnh báo
+      </span>
+    </td>
+  );
 
   if ((!threshold && isLoading) || !draft) {
     return (
-      <td colSpan={totalCols} className="overview-table__threshold-loading">
-        <span className="muted">Đang tải ngưỡng…</span>
-      </td>
+      <>
+        {productTitleCell}
+        {thresholdLabelCell}
+        <td colSpan={fieldsColSpan + actionsColSpan} className="overview-table__threshold-loading">
+          <span className="muted">Đang tải ngưỡng…</span>
+        </td>
+      </>
     );
   }
 
@@ -99,15 +129,13 @@ export function ProductThresholdEditor({ productCode, providers, threshold }: Pr
   };
 
   return (
-    <td colSpan={totalCols} className="overview-table__threshold-band">
-      <div className="overview-threshold-band">
-        <span className="overview-threshold-band__title" title="Ngưỡng cảnh báo">
-          Ngưỡng
-        </span>
-
+    <>
+      {productTitleCell}
+      {thresholdLabelCell}
+      <td colSpan={fieldsColSpan} className="overview-table__threshold-fields-cell">
         <div className="overview-threshold-band__fields">
           <label className="overview-threshold-field" title="Đỏ khi % Success ≤">
-            <span className="overview-threshold-field__label">Success</span>
+            <span className="overview-threshold-field__label">% Success</span>
             <span className="overview-threshold-field__input-wrap">
               <span className="overview-threshold-field__op muted">≤</span>
               <input
@@ -121,7 +149,7 @@ export function ProductThresholdEditor({ productCode, providers, threshold }: Pr
             </span>
           </label>
           <label className="overview-threshold-field" title="Đỏ khi % Pending ≥">
-            <span className="overview-threshold-field__label">Pending</span>
+            <span className="overview-threshold-field__label">% Pending</span>
             <span className="overview-threshold-field__input-wrap">
               <span className="overview-threshold-field__op muted">≥</span>
               <input
@@ -135,7 +163,7 @@ export function ProductThresholdEditor({ productCode, providers, threshold }: Pr
             </span>
           </label>
           <label className="overview-threshold-field" title="Đỏ khi % Fail ≥">
-            <span className="overview-threshold-field__label">Fail</span>
+            <span className="overview-threshold-field__label">% Fail</span>
             <span className="overview-threshold-field__input-wrap">
               <span className="overview-threshold-field__op muted">≥</span>
               <input
@@ -173,7 +201,8 @@ export function ProductThresholdEditor({ productCode, providers, threshold }: Pr
             </span>
           </label>
         </div>
-
+      </td>
+      <td colSpan={actionsColSpan} className="overview-table__threshold-actions-cell">
         <div className="overview-threshold-band__actions">
           <label className="overview-threshold-actions__check" title="Cảnh báo email">
             <input
@@ -192,7 +221,7 @@ export function ProductThresholdEditor({ productCode, providers, threshold }: Pr
             {save.isPending ? '…' : 'Lưu'}
           </button>
         </div>
-      </div>
-    </td>
+      </td>
+    </>
   );
 }

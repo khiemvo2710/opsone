@@ -208,7 +208,8 @@ func (s *Server) handleScopeMaintenanceApprove(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusNotFound, "not_found", "Không tìm thấy đề xuất")
 		return
 	}
-	startsAt, endsAt, err := parseMaintenanceWindow(body.StartsAt, body.EndsAt, body.DurationMin)
+	defaultMin := maintenanceDefaultDurationMin(r.Context(), s.DB)
+	startsAt, endsAt, err := parseMaintenanceWindow(body.StartsAt, body.EndsAt, body.DurationMin, defaultMin)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_window", err.Error())
 		return
@@ -356,7 +357,8 @@ func (s *Server) handleScopeMaintenanceExtend(w http.ResponseWriter, r *http.Req
 		DurationMin int    `json:"duration_min"`
 	}
 	_ = decodeJSON(r, &body)
-	startsAt, endsAt, err := parseMaintenanceWindow(body.StartsAt, body.EndsAt, body.DurationMin)
+	defaultMin := maintenanceDefaultDurationMin(r.Context(), s.DB)
+	startsAt, endsAt, err := parseMaintenanceWindow(body.StartsAt, body.EndsAt, body.DurationMin, defaultMin)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_window", err.Error())
 		return

@@ -82,6 +82,13 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_json", "JSON không hợp lệ")
 		return
 	}
+	if body.MaintenanceDefaultDurationMin != nil {
+		v := *body.MaintenanceDefaultDurationMin
+		if v < 1 || v > 255 {
+			writeError(w, http.StatusBadRequest, "invalid_input", "maintenance_default_duration_min phải từ 1 đến 255")
+			return
+		}
+	}
 	if err := s.DB.ApplyConfigUpdate(r.Context(), body); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
@@ -395,7 +402,11 @@ func (s *Server) handleScopeAutoPut(w http.ResponseWriter, r *http.Request, prod
 	}
 	saved, _ := s.DB.GetScopeAutoConfig(r.Context(), product, sku)
 	if store.ShouldAutoApplyScope(saved, time.Now()) {
-		_ = s.DB.CancelPendingRoutingPlansForScope(r.Context(), product, sku)
+		if sku == "" {
+			_ = s.DB.CancelPendingRoutingPlansForProduct(r.Context(), product)
+		} else {
+			_ = s.DB.CancelPendingRoutingPlansForScope(r.Context(), product, sku)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"product_code":  saved.ProductCode,
@@ -513,7 +524,8 @@ func (s *Server) handleRecommendationApprove(w http.ResponseWriter, r *http.Requ
 		DurationMin int    `json:"duration_min"`
 	}
 	_ = decodeJSON(r, &reqBody)
-	startsAt, endsAt, err := parseMaintenanceWindow(reqBody.StartsAt, reqBody.EndsAt, reqBody.DurationMin)
+	defaultMin := maintenanceDefaultDurationMin(ctx, s.DB)
+	startsAt, endsAt, err := parseMaintenanceWindow(reqBody.StartsAt, reqBody.EndsAt, reqBody.DurationMin, defaultMin)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_window", err.Error())
 		return

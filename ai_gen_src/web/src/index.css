@@ -113,6 +113,11 @@ textarea {
   overflow-y: auto;
 }
 
+.main-content:has(.dashboard) {
+  max-width: min(100%, 1680px);
+  overflow-x: visible;
+}
+
 .chat-widget {
   position: fixed;
   z-index: 30;
@@ -242,6 +247,11 @@ textarea {
 
 .page {
   max-width: 1100px;
+}
+
+.page.dashboard {
+  max-width: none;
+  width: 100%;
 }
 
 .incidents-page {
@@ -549,7 +559,10 @@ textarea {
 
 .table-scroll {
   max-width: 100%;
-  overflow-x: hidden;
+}
+
+.overview-table-wrap .table-scroll {
+  overflow-x: auto;
 }
 
 .mono {
@@ -611,6 +624,121 @@ textarea {
   justify-content: flex-end;
 }
 
+.settings-page {
+  max-width: 40rem;
+}
+
+.settings-page__header {
+  margin-bottom: 0.75rem;
+}
+
+.settings-page__header h1 {
+  margin-bottom: 0.25rem;
+}
+
+.settings-page__saved {
+  margin: 0 0 0.25rem;
+  padding: 0;
+  font-size: 0.875rem;
+}
+
+.settings-page__intro {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.settings-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.875rem;
+  margin-bottom: 0.75rem;
+}
+
+.settings-group {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--surface2);
+}
+
+.settings-group:last-child {
+  border-bottom: none;
+  padding-bottom: 0.25rem;
+}
+
+.settings-group__title {
+  margin: 0 0 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.4rem;
+  min-height: 1.75rem;
+}
+
+.settings-row:last-child {
+  margin-bottom: 0;
+}
+
+.settings-row--checkbox {
+  justify-content: flex-start;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+
+.settings-row--select {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+
+.settings-row--select .settings-row__label {
+  flex: none;
+}
+
+.settings-row__label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.875rem;
+}
+
+.settings-input--num,
+.settings-select {
+  padding: 0.3rem 0.45rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--surface2);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.settings-input--num {
+  width: 4.25rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.settings-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-page__meta {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+}
+
+.settings-page__save {
+  margin-top: 0;
+}
+
+/* Legacy field layout (other pages) */
 .settings-section {
   background: var(--surface);
   border-radius: var(--radius);
@@ -749,20 +877,46 @@ textarea {
 .overview-table-wrap {
   max-width: 100%;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .overview-table-wrap .table-scroll {
   overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.overview-table.data-table {
+  min-width: 92rem;
+  width: 100%;
+  table-layout: auto;
+}
+
+.overview-table.data-table th,
+.overview-table.data-table td {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.overview-table.data-table td.overview-table__auto-cell,
+.overview-table.data-table td.overview-table__scope-controls-cell,
+.overview-table.data-table td.overview-table__plan-actions,
+.overview-table.data-table td.overview-table__maint-suggest-actions,
+.overview-table.data-table td.overview-table__maint-cell,
+.overview-table.data-table td.overview-table__product-cell--group {
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .overview-table th,
 .overview-table td {
-  padding: 0.45rem 0.5rem;
-  font-size: 0.85rem;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.82rem;
 }
 
 .overview-table__col-product {
-  width: 13%;
+  width: 18rem;
+  min-width: 18rem;
 }
 
 .overview-table__col-sku {
@@ -773,35 +927,71 @@ textarea {
   width: 4%;
 }
 
-.overview-table__threshold-band {
-  padding: 0.65rem 0.85rem !important;
+.overview-table__threshold-spacer {
+  width: 18rem;
+  min-width: 18rem;
+  max-width: 18rem;
+  padding: 0.35rem 0.4rem;
+  border-right: 1px solid var(--surface2);
+  background: rgba(255, 255, 255, 0.03);
+  vertical-align: middle;
+  text-align: center;
 }
 
-.overview-threshold-band {
-  display: flex;
-  flex-wrap: nowrap;
+.overview-table__threshold-product-name {
+  display: inline-flex;
   align-items: center;
-  gap: 0.65rem 1rem;
+  justify-content: center;
   width: 100%;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.overview-table__threshold-row td {
+  border-bottom: 1px solid var(--surface2);
+  vertical-align: middle;
+}
+
+.overview-table__threshold-label-cell {
+  vertical-align: middle;
+  padding: 0.35rem 0.35rem 0.35rem 0.45rem !important;
+  white-space: nowrap;
+}
+
+.overview-table__threshold-fields-cell {
+  vertical-align: middle;
+  padding: 0.35rem 0.5rem 0.35rem 0.25rem !important;
+  overflow: visible;
+}
+
+.overview-table__threshold-actions-cell {
+  vertical-align: middle;
+  padding: 0.35rem 0.5rem !important;
+  text-align: right;
 }
 
 .overview-threshold-band__title {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.65rem;
   font-size: 0.72rem;
   font-weight: 700;
   color: var(--text);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  flex-shrink: 0;
-  min-width: 4.25rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .overview-threshold-band__fields {
   display: flex;
-  flex: 1 1 auto;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 1.25rem;
+  justify-content: flex-start;
+  gap: 0.5rem 1.15rem;
+  width: 100%;
   min-width: 0;
 }
 
@@ -809,14 +999,21 @@ textarea {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
-  gap: 0.35rem;
-  flex: 1 1 0;
-  min-width: 6.5rem;
-  max-width: 11rem;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.overview-threshold-field:nth-child(4) {
+  margin-left: 0.35rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .overview-threshold-field__label {
   font-size: 0.72rem;
+  font-weight: 600;
   color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
@@ -825,7 +1022,8 @@ textarea {
 .overview-threshold-field__input-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.35rem;
+  flex-shrink: 0;
 }
 
 .overview-threshold-field__op {
@@ -840,28 +1038,23 @@ textarea {
   align-items: center;
   justify-content: flex-end;
   gap: 0.55rem 0.75rem;
-  flex-shrink: 0;
-  margin-left: auto;
+  width: 100%;
 }
 
 @media (max-width: 1100px) {
-  .overview-threshold-band {
-    flex-wrap: wrap;
-  }
-
   .overview-threshold-band__fields {
-    flex-wrap: wrap;
-    justify-content: flex-start;
+    gap: 0.45rem 0.9rem;
     width: 100%;
   }
 
-  .overview-threshold-field {
-    flex: 0 1 auto;
+  .overview-threshold-field:nth-child(4) {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: none;
   }
 
   .overview-threshold-band__actions {
     width: 100%;
-    margin-left: 0;
     justify-content: flex-end;
   }
 }
@@ -891,17 +1084,17 @@ textarea {
 
 .provider-metric-cell {
   vertical-align: top;
-  padding: 0.4rem 0.5rem !important;
+  padding: 0.28rem 0.38rem !important;
 }
 
 .provider-metric-zones {
   display: flex;
   flex-direction: column;
-  gap: 0.28rem;
+  gap: 0.18rem;
 }
 
 .provider-metric-zone {
-  padding: 0.28rem 0.35rem;
+  padding: 0.18rem 0.28rem;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.02);
 }
@@ -909,7 +1102,7 @@ textarea {
 .provider-metric-zone--routing {
   background: rgba(91, 156, 245, 0.06);
   border: 1px solid rgba(91, 156, 245, 0.12);
-  padding: 0.3rem 0.4rem;
+  padding: 0.2rem 0.3rem;
 }
 
 .provider-metric-zone--pct,
@@ -919,11 +1112,11 @@ textarea {
 
 .provider-metric-zone__head {
   display: block;
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-bottom: 0.15rem;
+  margin-bottom: 0.08rem;
   line-height: 1;
 }
 
@@ -961,9 +1154,9 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 0.25rem;
-  font-size: 0.72rem;
-  line-height: 1.2;
+  gap: 0.2rem;
+  font-size: 0.68rem;
+  line-height: 1.15;
   font-weight: 600;
 }
 
@@ -1026,21 +1219,49 @@ textarea {
 }
 
 .overview-table__col-auto {
-  width: 14%;
-  min-width: 11.75rem;
+  width: 9rem;
+  min-width: 9rem;
 }
 
 .overview-table__col-maint {
-  width: 18%;
-  min-width: 15rem;
+  width: 9rem;
+  min-width: 9rem;
 }
 
-.overview-table.data-table td.overview-table__auto-cell {
+.overview-table.data-table td.overview-table__auto-cell,
+.overview-table.data-table td.overview-table__scope-controls-cell {
   overflow: visible;
   text-overflow: clip;
   white-space: normal;
   vertical-align: top;
-  padding: 0.4rem 0.45rem;
+  padding: 0.28rem 0.4rem;
+}
+
+.overview-table__scope-controls-cell .overview-table__product-cell-layout {
+  width: 100%;
+}
+
+.overview-table__scope-controls-cell .service-maint-btn {
+  width: auto;
+  max-width: 100%;
+}
+
+.overview-table__scope-controls-cell .service-maint-btn__trigger {
+  width: auto;
+  max-width: 100%;
+}
+
+.overview-table__auto-cell .scope-auto-editor--compact,
+.overview-table__scope-controls-cell .scope-auto-editor--compact,
+.overview-table__product-cell-auto .scope-auto-editor--compact {
+  align-items: flex-end;
+}
+
+.overview-table__auto-cell .scope-auto-editor__summary-value,
+.overview-table__scope-controls-cell .scope-auto-editor__summary-value,
+.overview-table__product-cell-auto .scope-auto-editor__summary-value {
+  font-size: 0.7rem;
+  padding: 0.12rem 0.4rem;
 }
 
 .service-maint-btn {
@@ -1051,23 +1272,29 @@ textarea {
 
 .service-maint-btn__trigger {
   width: 100%;
-  justify-content: center;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .service-maint-btn--open {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 0.35rem;
   padding: 0.35rem 0.4rem;
   border-radius: var(--radius);
   border: 1px solid var(--surface2);
   background: var(--bg);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .service-maint-btn__label {
   font-size: 0.62rem;
   font-weight: 600;
   line-height: 1.2;
+  text-align: left;
+  width: 100%;
 }
 
 .service-maint-btn__window {
@@ -1112,9 +1339,18 @@ textarea {
 }
 
 .scope-auto-editor--compact {
-  flex-direction: row;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+}
+
+.scope-auto-editor__summary-actions {
+  display: inline-flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 0.25rem;
+  justify-content: flex-end;
+  gap: 0.2rem;
+  min-width: 0;
 }
 
 .scope-auto-editor__summary {
@@ -1122,9 +1358,18 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 0.12rem;
+  gap: 0.1rem;
   min-width: 0;
   text-align: right;
+}
+
+.overview-table .scope-auto-editor__summary-label {
+  flex-shrink: 0;
+}
+
+.overview-table .scope-auto-editor__summary-value {
+  flex-shrink: 0;
+  align-self: center;
 }
 
 .scope-auto-editor__summary-label {
@@ -1343,12 +1588,13 @@ textarea {
 }
 
 .overview-table__threshold-row td {
-  padding: 0.55rem 0.65rem;
+  padding: 0.35rem 0.45rem;
   overflow: visible;
   text-overflow: clip;
   background: rgba(255, 255, 255, 0.05);
   border-top: 2px solid rgba(255, 255, 255, 0.14);
   border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  vertical-align: middle;
 }
 
 .overview-table__threshold-label {
@@ -1394,15 +1640,21 @@ textarea {
 
 .overview-threshold-cell input[type='number'],
 .overview-threshold-field input[type='number'] {
-  width: 3.25rem;
+  width: 3.1rem;
   max-width: 100%;
-  padding: 0.22rem 0.28rem;
+  padding: 0.15rem 0.22rem;
   border-radius: 4px;
   border: 1px solid var(--surface2);
   background: var(--bg);
   color: var(--text);
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   text-align: right;
+  line-height: 1.2;
+  vertical-align: middle;
+}
+
+.overview-table__threshold-row .btn--xs {
+  vertical-align: middle;
 }
 
 .overview-threshold-actions {
@@ -1410,7 +1662,7 @@ textarea {
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.5rem;
+  gap: 0.35rem;
 }
 
 .overview-threshold-actions__check {
@@ -1451,18 +1703,152 @@ textarea {
 }
 
 .overview-table__product-cell {
-  white-space: nowrap;
+  white-space: normal;
+  text-align: left;
 }
 
 .overview-table__product-cell--group {
-  vertical-align: middle;
+  vertical-align: top;
   background: rgba(255, 255, 255, 0.02);
   border-right: 1px solid var(--surface2);
+  min-width: 18rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.4rem;
+}
+
+.overview-table__product-cell-layout {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.35rem 0.45rem;
+  width: 100%;
+}
+
+.overview-table__product-cell-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.overview-table__product-cell-auto {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  align-self: flex-start;
+  justify-content: flex-start;
+  min-width: 7.25rem;
+  max-width: 48%;
 }
 
 .overview-table__product-cell--group .overview-table__product-name {
   display: block;
   font-weight: 600;
+  margin-bottom: 0.45rem;
+  text-align: left;
+  width: 100%;
+}
+
+.service-maint-btn--product {
+  margin-top: 0.15rem;
+  width: 100%;
+  max-width: 100%;
+}
+
+.service-maint-btn--product .service-maint-btn__trigger {
+  font-size: 0.68rem;
+  padding: 0.2rem 0.45rem;
+  line-height: 1.25;
+  white-space: normal;
+  width: auto;
+  max-width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.product-maint-actions {
+  margin-top: 0.25rem;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.product-maint-actions__buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem;
+  width: 100%;
+}
+
+.product-maint-actions__btn {
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
+  text-align: center;
+  white-space: nowrap;
+  line-height: 1.25;
+  padding-left: 0.35rem;
+  padding-right: 0.35rem;
+}
+
+.product-maint-actions__extend {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.35rem 0.4rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--surface2);
+  background: var(--bg);
+  box-sizing: border-box;
+}
+
+.product-maint-actions__hint {
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.product-maint-actions__field {
+  width: 100%;
+}
+
+.product-maint-actions__edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  width: 100%;
+}
+
+.product-maint-actions__error {
+  font-size: 0.65rem;
+  color: var(--danger, #e55);
+  line-height: 1.3;
+}
+
+.overview-table__product-cell--group .scope-auto-editor {
+  margin-top: 0;
+  width: auto;
+  max-width: 100%;
+  align-items: flex-end;
+}
+
+.overview-table__product-cell--group .scope-auto-editor--compact {
+  align-items: flex-end;
+}
+
+.overview-table__maint-cell .service-maint-btn {
+  width: 100%;
+}
+
+.overview-table__maint-cell .service-maint-btn__trigger {
+  width: auto;
+  max-width: 100%;
 }
 
 .overview-table__sku-count {
@@ -1472,29 +1858,46 @@ textarea {
 }
 
 .overview-table__product-group tr:first-child td {
-  padding-top: 0.65rem;
+  padding-top: 0.35rem;
 }
 
 /* Phân cách rõ giữa các SKU liên tiếp */
 .overview-table__scope-block-end td {
   border-bottom: 2px solid rgba(255, 255, 255, 0.16) !important;
   box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.2);
-  padding-bottom: 0.55rem !important;
+  padding-bottom: 0.35rem !important;
 }
 
 .overview-table__scope-block-end + .overview-table__sku-row td,
 .overview-table__scope-block-end + .overview-table__plan-row td {
-  padding-top: 0.6rem !important;
+  padding-top: 0.35rem !important;
 }
 
 .overview-table__product-group .overview-table__product-cell--group {
   background: rgba(255, 255, 255, 0.03);
-  vertical-align: middle;
+  vertical-align: top;
 }
 
 .overview-table td,
 .overview-table th {
   vertical-align: top;
+}
+
+.overview-table__threshold-row td {
+  vertical-align: middle !important;
+}
+
+.overview-table__threshold-row .overview-threshold-band__fields,
+.overview-table__threshold-row .overview-threshold-band__actions,
+.overview-table__threshold-row .overview-threshold-band__title,
+.overview-table__threshold-row .overview-threshold-field,
+.overview-table__threshold-row .overview-threshold-actions__check {
+  align-items: center;
+}
+
+.overview-table__threshold-row .overview-threshold-band__fields,
+.overview-table__threshold-row .overview-threshold-band__actions {
+  min-height: 1.65rem;
 }
 
 /* Gom dòng SKU với hàng con — bỏ viền ngăn giữa */
@@ -1508,7 +1911,7 @@ textarea {
 }
 
 .overview-table__plan-row td {
-  padding: 0.3rem 0.5rem;
+  padding: 0.22rem 0.4rem;
   background: rgba(234, 179, 8, 0.05);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   overflow: visible;
@@ -1583,6 +1986,11 @@ textarea {
   vertical-align: middle;
   overflow: visible;
   text-overflow: clip;
+  min-width: 11.5rem;
+}
+
+.overview-table__plan-actions .btn {
+  white-space: nowrap;
 }
 
 .overview-table__plan-actions-inner {
@@ -1612,8 +2020,8 @@ textarea {
 
 .overview-table__maint-suggest-row td {
   vertical-align: middle !important;
-  padding-top: 0.4rem !important;
-  padding-bottom: 0.4rem !important;
+  padding-top: 0.28rem !important;
+  padding-bottom: 0.28rem !important;
 }
 
 .overview-table__maint-suggest-row .overview-table__plan-label,
@@ -1652,10 +2060,10 @@ textarea {
   flex-direction: row;
   flex-wrap: nowrap;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: 0.5rem;
   width: 100%;
-  min-width: 0;
+  min-width: 28rem;
   min-height: 28px;
 }
 
@@ -1878,7 +2286,7 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.22rem;
+  gap: 0.12rem;
   min-width: 0;
 }
 
@@ -1920,7 +2328,7 @@ textarea {
   text-overflow: clip;
   white-space: normal;
   vertical-align: top;
-  padding: 0.4rem 0.45rem;
+  padding: 0.28rem 0.38rem;
 }
 
 .maint-active-bar {

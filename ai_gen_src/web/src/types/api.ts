@@ -70,11 +70,19 @@ export interface DashboardOverviewRow {
     action_type?: string;
     suggested?: boolean;
   };
-  /** Chế độ auto per SKU (recommend_only | auto | time_window). */
+  /** Chế độ auto hiệu lực (product ưu tiên trước SKU). */
   auto_action?: string;
   /** datetime-local value, e.g. 2026-06-10T08:00 */
   window_start?: string;
   window_end?: string;
+  /** Cấu hình auto cấp dịch vụ (product, sku_code=""). */
+  product_auto_action?: string;
+  product_window_start?: string;
+  product_window_end?: string;
+  /** Cấu hình auto cấp SKU (fallback khi chưa cấu hình dịch vụ). */
+  scope_auto_action?: string;
+  scope_window_start?: string;
+  scope_window_end?: string;
 }
 
 export interface DashboardOverview {
@@ -92,6 +100,7 @@ export interface AgentConfig {
   mock_enabled: boolean;
   mock_interval_min: number;
   mock_scenario: string;
+  maintenance_default_duration_min: number;
   agent_locale: string;
 }
 

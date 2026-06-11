@@ -1,8 +1,9 @@
-import { cloneElement, useEffect, useState, type ReactElement, type ReactNode } from 'react';
+import { cloneElement, useEffect, useState, type ReactElement } from 'react';
 import type { DashboardOverviewRow } from '../types/api';
 import { HealthBadge } from './HealthBadge';
 import { ProductThresholdEditor } from './ProductThresholdEditor';
 import { ServiceMaintenanceButton } from './ServiceMaintenanceButton';
+import { ProductMaintenanceActions } from './ProductMaintenanceActions';
 import SkuMaintenanceTimeLabel from './SkuMaintenanceTimeLabel';
 import { ScopeAutoEditor } from './ScopeAutoEditor';
 import { ProviderMetricCell } from './ProviderMetricCell';
@@ -34,6 +35,7 @@ import {
   type ScopeMaintenanceActionPayload,
 } from './ActiveMaintenanceCell';
 import { groupRowsByProduct, type ProductGroup } from '../utils/dashboardRowOrder';
+import { useMaintenanceDefaultDurationMin } from '../hooks/useMaintenanceDefaultDurationMin';
 
 const PROVIDERS = ['ESALE', 'IMEDIA', 'SHOPPAY'] as const;
 
@@ -211,6 +213,24 @@ export interface ScopeMaintenancePayload {
   endsAt?: string;
 }
 
+export interface ProductMaintenancePayload {
+  productCode: string;
+  skuCodes: string[];
+  reason: string;
+  startsAt: string;
+  endsAt: string;
+}
+
+export interface ProductReopenMaintenancePayload {
+  productCode: string;
+  scopes: { skuCode: string; maintenanceIds?: string[] }[];
+}
+
+export interface ProductExtendMaintenancePayload {
+  productCode: string;
+  scopes: { skuCode: string; startsAt: string; endsAt: string }[];
+}
+
 export interface MaintenanceApprovePayload {
   recommendationId: number;
   startsAt?: string;
@@ -238,12 +258,16 @@ interface Props {
   onApproveMaintenance?: (payload: MaintenanceApprovePayload) => void;
   onRejectMaintenance?: (recommendationId: number) => void;
   onApproveScopeMaintenance?: (payload: ScopeMaintenancePayload) => void;
+  onApproveProductMaintenance?: (payload: ProductMaintenancePayload) => void;
+  onReopenProductMaintenance?: (payload: ProductReopenMaintenancePayload) => void;
+  onExtendProductMaintenance?: (payload: ProductExtendMaintenancePayload) => void;
   onRejectScopeMaintenance?: (payload: ScopeMaintenancePayload) => void;
   onReopenMaintenance?: (payload: ScopeMaintenanceActionPayload) => void;
   onExtendMaintenance?: (payload: ExtendMaintenancePayload) => void;
   busyPlanId?: number | null;
   busyMaintId?: number | null;
   busyScopeKey?: string | null;
+  busyProductKey?: string | null;
   planActions?: Record<number, PlanAction>;
   maintActions?: Record<number, PlanAction>;
   scopeDone?: Record<string, { planId: number; action: PlanAction; rejectedRouting?: Record<string, number> }>;
@@ -264,18 +288,23 @@ export function ServiceOverviewTable({
   onApproveMaintenance,
   onRejectMaintenance,
   onApproveScopeMaintenance,
+  onApproveProductMaintenance,
+  onReopenProductMaintenance,
+  onExtendProductMaintenance,
   onRejectScopeMaintenance,
   onReopenMaintenance,
   onExtendMaintenance,
   busyPlanId,
   busyMaintId,
   busyScopeKey,
+  busyProductKey,
   planActions = {},
   maintActions = {},
   scopeDone = {},
   maintScopeDone = {},
   updatedAt,
 }: Props) {
+  const maintenanceDurationMin = useMaintenanceDefaultDurationMin();
   const [draftRouting, setDraftRouting] = useState<Record<DraftKey, Record<string, number>>>({});
   const [dirtyPlanDraftKeys, setDirtyPlanDraftKeys] = useState<Set<string>>(new Set());
   const [restoreScopeKey, setRestoreScopeKey] = useState<string | null>(null);
@@ -298,12 +327,12 @@ export function ServiceOverviewTable({
         if (!row.pending_maintenance) continue;
         const scopeKey = `${row.product_code}:${row.sku_code}`;
         if (next[scopeKey]) continue;
-        next[scopeKey] = defaultMaintenanceWindow();
+        next[scopeKey] = defaultMaintenanceWindow(maintenanceDurationMin);
         changed = true;
       }
       return changed ? next : prev;
     });
-  }, [rows, updatedAt]);
+  }, [rows, updatedAt, maintenanceDurationMin]);
 
   useEffect(() => {
     setDirtyPlanDraftKeys((prev) => {
@@ -385,11 +414,38 @@ export function ServiceOverviewTable({
                 restoreScopeKey,
               );
               const productThreshold = thresholdsByProduct[group.productCode];
+              const productMaintSkus = group.rows
+                .filter((row) => !isSkuUnderActiveMaintenance(row))
+                .map((row) => row.sku_code);
+              const allSkusUnderMaintenance =
+                group.rows.length > 0 &&
+                group.rows.every((row) => isSkuUnderActiveMaintenance(row));
+              const productActiveScopes = group.rows
+                .filter((row) => row.maintenance)
+                .map((row) => ({
+                  skuCode: row.sku_code,
+                  maintenanceIds: row.maintenance?.maintenance_ids,
+                  startsAt: String(row.maintenance?.starts_at ?? ''),
+                  endsAt: String(row.maintenance?.ends_at ?? ''),
+                }));
+              const showProductMaintenanceActions =
+                allSkusUnderMaintenance &&
+                productActiveScopes.length === group.rows.length &&
+                (onReopenProductMaintenance != null || onExtendProductMaintenance != null);
+              const productMaintBusy = busyProductKey === group.productCode;
+              const showProductScopeAuto = group.rows.some((r) => r.sku_code !== '');
+              const productAutoRow = group.rows[0];
+              const productAutoInitial = {
+                auto_action: productAutoRow?.product_auto_action ?? 'recommend_only',
+                window_start: productAutoRow?.product_window_start,
+                window_end: productAutoRow?.product_window_end,
+              };
               return (
                 <tbody key={group.productCode} className="overview-table__product-group">
                   <tr className="overview-table__threshold-row">
                     <ProductThresholdEditor
                       productCode={group.productCode}
+                      productLabel={group.productLabel}
                       providers={providers}
                       threshold={thresholdsByProduct[group.productCode]}
                     />
@@ -593,7 +649,37 @@ export function ServiceOverviewTable({
                         rowSpan={bodyRowCount}
                         className="overview-table__product-cell overview-table__product-cell--group"
                       >
-                        <span className="overview-table__product-name">{group.productLabel}</span>
+                        <div className="overview-table__product-cell-layout">
+                          <div className="overview-table__product-cell-main">
+                            {onApproveProductMaintenance && onApproveScopeMaintenance && productMaintSkus.length > 0 && (
+                              <ServiceMaintenanceButton
+                                productCode={group.productCode}
+                                skuCodes={productMaintSkus}
+                                busy={productMaintBusy}
+                                onStartProduct={onApproveProductMaintenance}
+                              />
+                            )}
+                            {showProductMaintenanceActions && (
+                                <ProductMaintenanceActions
+                                  productCode={group.productCode}
+                                  scopes={productActiveScopes}
+                                  busy={productMaintBusy}
+                                  onReopenProduct={onReopenProductMaintenance}
+                                  onExtendProduct={onExtendProductMaintenance}
+                                />
+                              )}
+                          </div>
+                          {showProductScopeAuto && (
+                            <div className="overview-table__product-cell-auto">
+                              <ScopeAutoEditor
+                                productCode={group.productCode}
+                                skuCode=""
+                                level="product"
+                                initial={productAutoInitial}
+                              />
+                            </div>
+                          )}
+                        </div>
                       </td>
                     )}
                     {row.maintenance ? (
@@ -674,35 +760,39 @@ export function ServiceOverviewTable({
                         />
                       );
                     })}
-                    <td className="overview-table__maint-cell">
-                      {inMaintenance ? (
-                        <ActiveMaintenanceCell
-                          row={row}
-                          busy={scopeBusy}
-                          onReopen={onReopenMaintenance}
-                          onExtend={onExtendMaintenance}
-                        />
-                      ) : (
-                        onApproveScopeMaintenance && (
-                          <ServiceMaintenanceButton
+                    <td colSpan={2} className="overview-table__scope-controls-cell">
+                      <div className="overview-table__product-cell-layout">
+                        <div className="overview-table__product-cell-main">
+                          {inMaintenance ? (
+                            <ActiveMaintenanceCell
+                              row={row}
+                              busy={scopeBusy}
+                              onReopen={onReopenMaintenance}
+                              onExtend={onExtendMaintenance}
+                            />
+                          ) : (
+                            onApproveScopeMaintenance && (
+                              <ServiceMaintenanceButton
+                                productCode={row.product_code}
+                                skuCode={row.sku_code}
+                                busy={scopeBusy}
+                                onStart={onApproveScopeMaintenance}
+                              />
+                            )
+                          )}
+                        </div>
+                        <div className="overview-table__product-cell-auto">
+                          <ScopeAutoEditor
                             productCode={row.product_code}
                             skuCode={row.sku_code}
-                            busy={scopeBusy}
-                            onStart={onApproveScopeMaintenance}
+                            initial={{
+                              auto_action: row.scope_auto_action ?? row.auto_action ?? 'recommend_only',
+                              window_start: row.scope_window_start ?? row.window_start,
+                              window_end: row.scope_window_end ?? row.window_end,
+                            }}
                           />
-                        )
-                      )}
-                    </td>
-                    <td className="overview-table__auto-cell">
-                      <ScopeAutoEditor
-                        productCode={row.product_code}
-                        skuCode={row.sku_code}
-                        initial={{
-                          auto_action: row.auto_action ?? 'recommend_only',
-                          window_start: row.window_start,
-                          window_end: row.window_end,
-                        }}
-                      />
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -714,7 +804,7 @@ export function ServiceOverviewTable({
                   );
                 }
 
-                const subRows: ReactNode[] = [];
+                const subRows: ReactElement[] = [];
 
                 if (showPendingMaint && row.pending_maintenance) {
                   const pm = row.pending_maintenance;
@@ -735,7 +825,8 @@ export function ServiceOverviewTable({
                     onRejectScopeMaintenance;
                   const canActMaint = canActMaintReal || canActMaintSuggested;
                   const maintBusy = scopeBusy || (maintId != null && busyMaintId === maintId);
-                  const maintWindow = maintWindowDraft[scopeKey] ?? defaultMaintenanceWindow();
+                  const maintWindow =
+                    maintWindowDraft[scopeKey] ?? defaultMaintenanceWindow(maintenanceDurationMin);
                   const maintWindowErr = maintenanceWindowError(maintWindow.startsAt, maintWindow.endsAt);
                   const maintISO = maintWindowErr
                     ? null

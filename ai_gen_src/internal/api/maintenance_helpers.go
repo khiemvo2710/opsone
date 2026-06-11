@@ -100,7 +100,15 @@ func validateMaintenanceWindow(startsAt, endsAt time.Time) error {
 	return nil
 }
 
-func parseMaintenanceWindow(startsAtRaw, endsAtRaw string, durationMin int) (time.Time, time.Time, error) {
+func maintenanceDefaultDurationMin(ctx context.Context, db *store.DB) int {
+	cfg, err := db.GetAgentSettings(ctx)
+	if err != nil {
+		return 60
+	}
+	return store.NormalizeMaintenanceDefaultDurationMin(cfg.MaintenanceDefaultDurationMin)
+}
+
+func parseMaintenanceWindow(startsAtRaw, endsAtRaw string, durationMin, defaultMin int) (time.Time, time.Time, error) {
 	if startsAtRaw != "" && endsAtRaw != "" {
 		startsAt, err := parseFlexibleTime(startsAtRaw)
 		if err != nil {
@@ -114,6 +122,9 @@ func parseMaintenanceWindow(startsAtRaw, endsAtRaw string, durationMin int) (tim
 			return time.Time{}, time.Time{}, err
 		}
 		return startsAt, endsAt, nil
+	}
+	if durationMin <= 0 {
+		durationMin = defaultMin
 	}
 	if durationMin <= 0 {
 		durationMin = 60

@@ -188,7 +188,7 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 			}
 			plan := BuildRoutingPlan(*pc, *worst, output.RoutingPlanReason(pc.Product.ProductCode, worst.ProviderCode, allEvidence), prodTh)
 			scope := plan.Scope
-			scopeAuto, _ := r.DB.GetScopeAutoConfig(ctx, pc.Product.ProductCode, worst.SKUCode)
+			scopeAuto, _ := r.DB.ResolveEffectiveScopeAuto(ctx, pc.Product.ProductCode, worst.SKUCode)
 			autoApply := store.ShouldAutoApplyScope(scopeAuto, time.Now())
 			hasPending, err := r.DB.HasPendingRoutingPlan(ctx, pc.Product.ProductCode, worst.SKUCode)
 			if err != nil {
@@ -258,7 +258,7 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 				detail = skuReason
 			}
 			_ = r.DB.CancelPendingRoutingPlansForScope(ctx, pc.Product.ProductCode, worst.SKUCode)
-			scopeAuto, _ := r.DB.GetScopeAutoConfig(ctx, pc.Product.ProductCode, worst.SKUCode)
+			scopeAuto, _ := r.DB.ResolveEffectiveScopeAuto(ctx, pc.Product.ProductCode, worst.SKUCode)
 			if store.ShouldAutoApplyScope(scopeAuto, time.Now()) {
 				if err := r.applyMaintenanceAuto(ctx, pc, worst, detail); err != nil {
 					return err
@@ -317,8 +317,13 @@ func (r *Reasoner) applyMaintenanceAuto(ctx context.Context, pc *ProductContext,
 	if len(targets) == 0 {
 		return nil
 	}
+	settings, err := r.DB.GetAgentSettings(ctx)
+	if err != nil {
+		return err
+	}
+	durationMin := store.NormalizeMaintenanceDefaultDurationMin(settings.MaintenanceDefaultDurationMin)
 	startsAt := time.Now()
-	endsAt := startsAt.Add(60 * time.Minute)
+	endsAt := startsAt.Add(time.Duration(durationMin) * time.Minute)
 	reg := tools.NewRegistry(r.DB)
 	reason := fmt.Sprintf("auto maintenance: %s", detail)
 	for i, provider := range targets {

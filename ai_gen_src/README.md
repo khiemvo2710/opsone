@@ -34,15 +34,18 @@ Monorepo Go + MySQL cho **OpsOne** — spec: `../OpsOne.md`
 - `GET /dashboard/overview` — ẩn `pending_plan` / `pending_maintenance` khi `ShouldAutoApplyScope=true`; poll auto apply (`autoApplyScopeFromSnapshot`, tối đa 2 pass routing→bảo trì). Từ chối routing/bảo trì → poll tiếp có thể sinh đề xuất mới (không cooldown).
 - `POST .../maintenance/extend` — **400** `no_change` khi gia hạn không đổi thời gian (`CountActiveMaintenanceForSKU`)
 - Endpoints: health-status, config, incidents (phân trang), scopes auto/routing/maintenance, maintenance, chat (stub), `/events`
-- Integration test: `$env:OPSONE_INTEGRATION=1; go test ./internal/api/... -v`
+- Integration test: `$env:OPSONE_INTEGRATION=1; go test ./internal/api/... -v` — gồm `TestProductScopeAutoPutOverview`, `TestConfigPutMaintenanceDefaultDuration`
 
 ### Phase 6 — Frontend React ✅
 - `web/` — Vite + React 18 + TypeScript + React Router + TanStack Query
 - Routes §9: `/`, `/incidents`, `/settings`, `/maintenance` (không `/incidents/:id`, không `/chat` riêng)
+- **`Settings`** — card compact §9.5 (`max-width: 40rem`): scheduler + **thời lượng BT mặc định** + mock; select kịch bản full-width
 - **`ServiceOverviewTable`** — tab Thẻ/Topup/Data; group SKU `rowspan`; cột provider 6 chỉ số; hàng con plan/bảo trì/**Mở lại provider**; `RedSkuScrollNav` ▲ 🔴 1/N ▼
-- **`SkuMaintenanceTimeLabel`** — nhãn BT 4 dòng dưới SKU; **`ServiceMaintenanceButton`** / **`ActiveMaintenanceCell`** cột Bảo trì (§9.0.5–9.0.6)
+- **`ProductThresholdEditor`** — hàng **Ngưỡng cảnh báo** đầu nhóm: `product_label` · label ngưỡng · 5 cụm %/GD thẳng cột Provider (§9.5.3)
+- **`SkuMaintenanceTimeLabel`** — nhãn BT 4 dòng dưới SKU; **`ServiceMaintenanceButton`** / **`ActiveMaintenanceCell`**; cột SKU gộp **Bảo trì + Chế độ BT/Routing** (`scope-controls-cell`)
+- **`ProductMaintenanceActions`** — **Mở lại dịch vụ** / **Gia hạn bảo trì** batch cột Dịch vụ — **chỉ khi mọi SKU** trong dịch vụ đang BT (§9.0.7)
 - Toast scope: `{product_label} · {SKU}` (`scopeDisplayLabel`)
-- **Chế độ BT / Routing** per SKU — compact + ⋯; ẩn hàng đề xuất khi auto (`utils/scopeAuto.ts`)
+- **`ScopeAutoEditor`** — chế độ BT/routing cấp dịch vụ + SKU; compact + ⋯; **Lưu** riêng (`PUT /scopes/.../auto`, không dùng Lưu hàng Ngưỡng); `patchOverviewCache` + refetch; ẩn hàng đề xuất khi `ShouldAutoApplyScope` (`utils/scopeAuto.ts`, `ResolveEffectiveScopeAuto`)
 - **Mở lại** provider — hàng *Mở lại provider*: **Trả lại** → baseline; **Lưu** → `restore-baseline` (baseline) hoặc `routing/apply` (tùy chỉnh)
 - **Mở lại dịch vụ** — `POST .../maintenance/reopen-service` (atomic baseline + grace)
 - Chat widget — kéo dock 4 góc (`useChatDock`); voice `vi-VN` (`useVoiceInput`)
@@ -63,7 +66,7 @@ Monorepo Go + MySQL cho **OpsOne** — spec: `../OpsOne.md`
 | **UI TT** | Ẩn icon 🟢🟡🔴 khi scope đang bảo trì (`maintenanceDisplay.ts`) |
 | **On-call** | Restart `worker-agent` / `worker-mock` khi crash |
 
-**Chế độ BT / Routing (§9.5.2):**
+**Chế độ BT / Routing (§9.5.2):** cấu hình **cấp dịch vụ** (`PUT /scopes/{product}/auto`, `sku_code=""`) ưu tiên trước **cấp SKU** khi đã lưu row dịch vụ (`ResolveEffectiveScopeAuto`). Overview trả ba lớp: `product_auto_action`, `scope_auto_action`, `auto_action` (hiệu lực). Backend: `ScopeAutoMapKey` trong `dashboard.go` — restart `cmd/api` sau đổi handler overview.
 
 | `auto_action` | Nhãn UI | Hành vi |
 |---------------|---------|---------|
@@ -121,10 +124,10 @@ ai_gen_src/
 ├── internal/agent, api, store, tools, …
 ├── db/schema.sql, seed.sql
 └── web/src/
-    ├── components/   # ServiceOverviewTable, SkuMaintenanceTimeLabel, RedSkuScrollNav, …
-    ├── hooks/        # useChatDock, useSSE, useVoiceInput, useOverallHealth
+    ├── components/   # ServiceOverviewTable, ScopeAutoEditor, ProductThresholdEditor, …
+    ├── hooks/        # useChatDock, useSSE, useVoiceInput, useOverallHealth, useMaintenanceDefaultDurationMin
     ├── utils/        # scopeAuto, dashboardRowOrder (scopeDisplayLabel), maintenanceWindow, …
     └── pages/        # Dashboard, IncidentsPage, Settings, …
 ```
 
-Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §9.0 Dashboard, §9.5.2 Chế độ BT / Routing.
+Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §9.0 Dashboard, §9.5 Cấu hình (compact), §9.5.2 Chế độ BT / Routing, §9.5.5 Thời lượng BT mặc định.

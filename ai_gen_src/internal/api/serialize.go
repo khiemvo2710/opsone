@@ -138,12 +138,13 @@ func thresholdJSON(t store.ProductThreshold) map[string]any {
 
 func configJSON(s store.AgentSettingsFull) map[string]any {
 	return map[string]any{
-		"scheduler_enabled":      s.SchedulerEnabled,
-		"scheduler_interval_min": s.SchedulerIntervalMin,
-		"data_source":            s.DataSource,
-		"mock_enabled":           s.MockEnabled,
-		"mock_interval_min":      s.MockIntervalMin,
-		"mock_scenario":          s.MockScenario,
-		"agent_locale":           s.AgentLocale,
+		"scheduler_enabled":                s.SchedulerEnabled,
+		"scheduler_interval_min":           s.SchedulerIntervalMin,
+		"data_source":                      s.DataSource,
+		"mock_enabled":                     s.MockEnabled,
+		"mock_interval_min":                s.MockIntervalMin,
+		"mock_scenario":                    s.MockScenario,
+		"maintenance_default_duration_min": store.NormalizeMaintenanceDefaultDurationMin(s.MaintenanceDefaultDurationMin),
+		"agent_locale":                     s.AgentLocale,
 	}
 }

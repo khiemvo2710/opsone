@@ -18,6 +18,9 @@ import {
   type ApproveRoutingPayload,
   type MaintenanceApprovePayload,
   type ScopeMaintenancePayload,
+  type ProductMaintenancePayload,
+  type ProductReopenMaintenancePayload,
+  type ProductExtendMaintenancePayload,
   type ScopeRoutingPayload,
   type ScopeRoutingApplyPayload,
 } from '../components/ServiceOverviewTable';
@@ -129,6 +132,7 @@ export function Dashboard() {
   const [busyPlanId, setBusyPlanId] = useState<number | null>(null);
   const [busyMaintId, setBusyMaintId] = useState<number | null>(null);
   const [busyScopeKey, setBusyScopeKey] = useState<string | null>(null);
+  const [busyProductKey, setBusyProductKey] = useState<string | null>(null);
   const [planActions, setPlanActions] = useState<Record<number, PlanAction>>({});
   const [maintActions, setMaintActions] = useState<Record<number, PlanAction>>({});
   const [scopeDone, setScopeDone] = useState<
@@ -533,6 +537,135 @@ export function Dashboard() {
     },
   });
 
+  const approveProductMaintenance = useMutation({
+    mutationFn: async (payload: ProductMaintenancePayload) => {
+      const failed: string[] = [];
+      for (const skuCode of payload.skuCodes) {
+        try {
+          await api(`/scopes/${payload.productCode}/${skuCode}/maintenance/approve`, {
+            method: 'POST',
+            body: JSON.stringify({
+              reason: payload.reason,
+              starts_at: payload.startsAt,
+              ends_at: payload.endsAt,
+            }),
+          });
+        } catch {
+          failed.push(skuCode || '—');
+        }
+      }
+      if (failed.length > 0) {
+        throw new ApiClientError({
+          code: 'partial_failure',
+          message_vi: `Bảo trì thất bại ${failed.length}/${payload.skuCodes.length} SKU: ${failed.join(', ')}`,
+        });
+      }
+    },
+    onMutate: (payload) => {
+      setBusyProductKey(payload.productCode);
+    },
+    onSuccess: async (_, payload) => {
+      showToast(
+        'ok',
+        `Đã bảo trì toàn bộ ${payload.skuCodes.length} SKU của ${payload.productCode}.`,
+      );
+      await qc.refetchQueries({ queryKey: ['dashboard-overview'] });
+      void qc.invalidateQueries({ queryKey: ['health-status'] });
+      void qc.invalidateQueries({ queryKey: ['maintenance'] });
+      setBusyProductKey(null);
+    },
+    onError: (e) => {
+      showToast('err', e instanceof ApiClientError ? e.message : 'Bảo trì toàn sản phẩm thất bại');
+      void qc.refetchQueries({ queryKey: ['dashboard-overview'] });
+      setBusyProductKey(null);
+    },
+  });
+
+  const reopenProductMaintenance = useMutation({
+    mutationFn: async (payload: ProductReopenMaintenancePayload) => {
+      const failed: string[] = [];
+      for (const scope of payload.scopes) {
+        try {
+          await api<{ applied: boolean }>(
+            `/scopes/${payload.productCode}/${scope.skuCode}/maintenance/reopen-service`,
+            {
+              method: 'POST',
+              body: JSON.stringify({ maintenance_ids: scope.maintenanceIds ?? [] }),
+            },
+          );
+        } catch {
+          failed.push(scope.skuCode || '—');
+        }
+      }
+      if (failed.length > 0) {
+        throw new ApiClientError({
+          code: 'partial_failure',
+          message_vi: `Mở lại thất bại ${failed.length}/${payload.scopes.length} SKU: ${failed.join(', ')}`,
+        });
+      }
+    },
+    onMutate: (payload) => {
+      setBusyProductKey(payload.productCode);
+    },
+    onSuccess: async (_, payload) => {
+      showToast(
+        'ok',
+        `Đã mở lại dịch vụ toàn bộ ${payload.scopes.length} SKU của ${payload.productCode} — routing về baseline.`,
+      );
+      await qc.refetchQueries({ queryKey: ['dashboard-overview'] });
+      void qc.invalidateQueries({ queryKey: ['health-status'] });
+      void qc.invalidateQueries({ queryKey: ['maintenance'] });
+      setBusyProductKey(null);
+    },
+    onError: (e) => {
+      showToast('err', e instanceof ApiClientError ? e.message : 'Mở lại toàn sản phẩm thất bại');
+      void qc.refetchQueries({ queryKey: ['dashboard-overview'] });
+      setBusyProductKey(null);
+    },
+  });
+
+  const extendProductMaintenance = useMutation({
+    mutationFn: async (payload: ProductExtendMaintenancePayload) => {
+      const failed: string[] = [];
+      for (const scope of payload.scopes) {
+        try {
+          await api(`/scopes/${payload.productCode}/${scope.skuCode}/maintenance/extend`, {
+            method: 'POST',
+            body: JSON.stringify({
+              starts_at: scope.startsAt,
+              ends_at: scope.endsAt,
+            }),
+          });
+        } catch {
+          failed.push(scope.skuCode || '—');
+        }
+      }
+      if (failed.length > 0) {
+        throw new ApiClientError({
+          code: 'partial_failure',
+          message_vi: `Gia hạn thất bại ${failed.length}/${payload.scopes.length} SKU: ${failed.join(', ')}`,
+        });
+      }
+    },
+    onMutate: (payload) => {
+      setBusyProductKey(payload.productCode);
+    },
+    onSuccess: async (_, payload) => {
+      showToast(
+        'ok',
+        `Đã gia hạn bảo trì ${payload.scopes.length} SKU của ${payload.productCode}.`,
+      );
+      await qc.invalidateQueries({ queryKey: ['dashboard-overview'] });
+      void qc.invalidateQueries({ queryKey: ['maintenance'] });
+      setBusyProductKey(null);
+    },
+    onError: (e) => {
+      showToast('err', e instanceof ApiClientError ? e.message : 'Gia hạn toàn sản phẩm thất bại');
+      void qc.refetchQueries({ queryKey: ['dashboard-overview'] });
+      setBusyProductKey(null);
+    },
+  });
+
   const reopenMaintenance = useMutation({
     mutationFn: (payload: ScopeMaintenanceActionPayload) =>
       api<{ applied: boolean; proposed_pct?: Record<string, number> }>(
@@ -679,6 +812,7 @@ export function Dashboard() {
             busyPlanId={busyPlanId}
             busyMaintId={busyMaintId}
             busyScopeKey={busyScopeKey}
+            busyProductKey={busyProductKey}
             planActions={planActions}
             maintActions={maintActions}
             scopeDone={scopeDone}
@@ -692,6 +826,9 @@ export function Dashboard() {
             onApproveMaintenance={(payload) => approveMaintenance.mutate(payload)}
             onRejectMaintenance={(id) => rejectMaintenance.mutate(id)}
             onApproveScopeMaintenance={(payload) => approveScopeMaintenance.mutate(payload)}
+            onApproveProductMaintenance={(payload) => approveProductMaintenance.mutate(payload)}
+            onReopenProductMaintenance={(payload) => reopenProductMaintenance.mutate(payload)}
+            onExtendProductMaintenance={(payload) => extendProductMaintenance.mutate(payload)}
             onRejectScopeMaintenance={(payload) => rejectScopeMaintenance.mutate(payload)}
             onReopenMaintenance={(payload) => reopenMaintenance.mutate(payload)}
             onExtendMaintenance={(payload) => extendMaintenance.mutate(payload)}
