@@ -17,6 +17,7 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
+	cfg.LogLLMStartup()
 
 	db, err := store.Open(cfg.MySQLDSN)
 	if err != nil {

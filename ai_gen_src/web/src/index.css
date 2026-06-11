@@ -126,7 +126,8 @@ textarea {
   transition: left 0.18s ease, top 0.18s ease;
 }
 
-.chat-widget--dragging {
+.chat-widget--dragging,
+.chat-widget--resizing {
   transition: none;
 }
 
@@ -170,79 +171,252 @@ textarea {
 }
 
 .chat-widget__panel {
-  width: min(360px, calc(100vw - 2rem));
-  max-height: min(480px, calc(100vh - 6rem));
+  position: relative;
+  min-width: 320px;
+  min-height: 360px;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  background: var(--bg);
   border: 1px solid var(--surface2);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  border-radius: calc(var(--radius) + 2px);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
   overflow: hidden;
 }
 
+.chat-widget__resize-handle {
+  position: absolute;
+  width: 1.25rem;
+  height: 1.25rem;
+  touch-action: none;
+  z-index: 6;
+}
+
+.chat-widget__resize-handle::before {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-color: var(--muted);
+  border-style: solid;
+  opacity: 0;
+  transition: opacity 0.15s ease, border-color 0.15s ease;
+  pointer-events: none;
+}
+
+.chat-widget__resize-handle:hover::before,
+.chat-widget__resize-handle--active::before {
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.chat-widget__resize-handle--nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.chat-widget__resize-handle--nw::before {
+  top: 4px;
+  left: 4px;
+  border-width: 2px 0 0 2px;
+}
+
+.chat-widget__resize-handle--ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.chat-widget__resize-handle--ne::before {
+  top: 4px;
+  right: 4px;
+  border-width: 2px 2px 0 0;
+}
+
+.chat-widget__resize-handle--sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.chat-widget__resize-handle--sw::before {
+  bottom: 4px;
+  left: 4px;
+  border-width: 0 0 2px 2px;
+}
+
+.chat-widget__resize-handle--se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+
+.chat-widget__resize-handle--se::before {
+  right: 4px;
+  bottom: 4px;
+  border-width: 0 2px 2px 0;
+}
+
 .chat-widget__header {
+  position: relative;
+  z-index: 2;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.65rem 0.85rem;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
   border-bottom: 1px solid var(--surface2);
-  background: var(--surface2);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.chat-widget__title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.chat-widget__title strong {
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+}
+
+.chat-widget__subtitle {
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 .chat-widget__close {
+  position: relative;
+  z-index: 7;
   min-width: 2rem;
   padding: 0.15rem 0.4rem;
   font-size: 1.1rem;
   line-height: 1;
-}
-
-.chat-widget__hint {
-  margin: 0;
-  padding: 0.35rem 0.85rem 0;
-  font-size: 0.72rem;
+  flex-shrink: 0;
 }
 
 .chat-widget__feed {
   flex: 1;
-  min-height: 120px;
-  max-height: 280px;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.65rem 0.85rem;
+  gap: 0.85rem;
+  padding: 1rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface2) transparent;
+}
+
+.chat-widget__feed .chat-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: none;
+  padding: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.chat-widget__feed .chat-bubble__role {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chat-widget__feed .chat-bubble__body {
+  padding: 0.9rem 1rem;
+  border-radius: var(--radius);
+  font-size: 0.98rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: visible;
+}
+
+.chat-widget__feed .chat-bubble--assistant .chat-bubble__body {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--surface2);
+  border-left: 3px solid var(--accent);
+  color: var(--text);
+}
+
+.chat-widget__feed .chat-bubble--user {
+  align-self: flex-end;
+  max-width: min(92%, 32rem);
+}
+
+.chat-widget__feed .chat-bubble--user .chat-bubble__role {
+  text-align: right;
+  color: var(--muted);
+}
+
+.chat-widget__feed .chat-bubble--user .chat-bubble__body {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+}
+
+.chat-widget__feed .chat-bubble__body--pending {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .chat-widget__empty {
-  font-size: 0.85rem;
+  font-size: 0.92rem;
+  line-height: 1.55;
   margin: 0;
+  padding: 0.5rem 0.25rem;
 }
 
 .chat-widget__input {
-  padding: 0.5rem 0.85rem 0.75rem;
+  padding: 0.75rem 1rem 1rem;
   border-top: 1px solid var(--surface2);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.55rem;
+  flex-shrink: 0;
 }
 
 .chat-widget__input textarea {
   width: 100%;
-  resize: none;
-  padding: 0.55rem 0.65rem;
+  resize: vertical;
+  min-height: 5rem;
+  max-height: 10rem;
+  padding: 0.75rem 0.85rem;
   border-radius: var(--radius);
   border: 1px solid var(--surface2);
   background: var(--bg);
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.chat-widget__input .chat-input__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chat-widget__input .btn {
+  min-height: 2.5rem;
+  padding: 0.45rem 1rem;
+  font-size: 0.92rem;
 }
 
 .chat-widget__voice {
   margin: 0;
-  padding: 0 0.85rem 0.5rem;
-  font-size: 0.8rem;
+  padding: 0 1rem 0.75rem;
+  font-size: 0.85rem;
+  background: var(--surface);
 }
 
 .page {
@@ -2671,6 +2845,16 @@ textarea {
   .chat-widget--top-left {
     left: 0.75rem;
     top: 7.5rem;
+  }
+
+  .chat-widget__panel {
+    width: calc(100vw - 1rem) !important;
+    height: min(88vh, 780px) !important;
+    max-height: min(88vh, 780px) !important;
+  }
+
+  .chat-widget__resize-handle {
+    display: none;
   }
 
   .sku-scroll-nav {

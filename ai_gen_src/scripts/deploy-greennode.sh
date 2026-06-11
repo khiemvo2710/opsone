@@ -3,16 +3,20 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILLS="$(cd "$ROOT/../greennode-agentbase-skills" && pwd)"
+REPO="$(cd "$ROOT/.." && pwd)"
+SKILLS="$REPO/.claude/skills/agentbase"
 RUNTIME_NAME="${RUNTIME_NAME:-opsone-api}"
 FLAVOR="${FLAVOR:-runtime-s2-general-2x4}"
 ENV_FILE="${ENV_FILE:-$ROOT/.env.greennode}"
 TAG="v$(date +%Y%m%d%H%M%S)"
 
-cd "$SKILLS"
-bash .claude/skills/agentbase/scripts/check_credentials.sh iam
+cd "$REPO"
+set -a
+[ -f "$REPO/.env" ] && . "$REPO/.env"
+set +a
+bash "$SKILLS/scripts/check_credentials.sh" iam
 
-REPO_JSON=$(bash .claude/skills/agentbase/scripts/cr.sh repo get)
+REPO_JSON=$(bash "$SKILLS/scripts/cr.sh" repo get)
 REGISTRY=$(echo "$REPO_JSON" | jq -r '.registryUrl // .data.registryUrl // empty')
 REPO_NAME=$(echo "$REPO_JSON" | jq -r '.name // .data.name // empty')
 if [ -z "$REGISTRY" ] || [ -z "$REPO_NAME" ]; then
@@ -26,11 +30,11 @@ echo "Image: $IMAGE"
 cd "$ROOT"
 docker build --platform linux/amd64 -t "$IMAGE" .
 
-bash "$SKILLS/.claude/skills/agentbase/scripts/cr.sh" credentials docker-login
+bash "$SKILLS/scripts/cr.sh" credentials docker-login
 docker push "$IMAGE"
 
-cd "$SKILLS"
-EXISTING=$(bash .claude/skills/agentbase/scripts/runtime.sh list | jq -r --arg n "$RUNTIME_NAME" '.listData[]? | select(.name==$n) | .id' | head -1)
+cd "$REPO"
+EXISTING=$(bash "$SKILLS/scripts/runtime.sh" list | jq -r --arg n "$RUNTIME_NAME" '.listData[]? | select(.name==$n) | .id' | head -1)
 ENV_ARGS=()
 if [ -f "$ENV_FILE" ]; then
   ENV_ARGS=(--env-file "$ENV_FILE")
@@ -38,7 +42,7 @@ fi
 
 if [ -n "$EXISTING" ]; then
   echo "Updating runtime $EXISTING"
-  bash .claude/skills/agentbase/scripts/runtime.sh update "$EXISTING" \
+  bash "$SKILLS/scripts/runtime.sh" update "$EXISTING" \
     --image "$IMAGE" \
     --flavor "$FLAVOR" \
     --from-cr \
@@ -47,7 +51,7 @@ if [ -n "$EXISTING" ]; then
   RUNTIME_ID="$EXISTING"
 else
   echo "Creating runtime $RUNTIME_NAME"
-  OUT=$(bash .claude/skills/agentbase/scripts/runtime.sh create \
+  OUT=$(bash "$SKILLS/scripts/runtime.sh" create \
     --name "$RUNTIME_NAME" \
     --image "$IMAGE" \
     --flavor "$FLAVOR" \
@@ -62,8 +66,8 @@ else
   RUNTIME_ID=$(echo "$OUT" | jq -r '.id // .data.id // empty')
 fi
 
-bash .claude/skills/agentbase/scripts/runtime.sh get "$RUNTIME_ID"
-ENDPOINT=$(bash .claude/skills/agentbase/scripts/runtime.sh endpoints list "$RUNTIME_ID" | jq -r '.listData[]? | select(.name=="DEFAULT") | .url' | head -1)
+bash "$SKILLS/scripts/runtime.sh" get "$RUNTIME_ID"
+ENDPOINT=$(bash "$SKILLS/scripts/runtime.sh" endpoints list "$RUNTIME_ID" | jq -r '.listData[]? | select(.name=="DEFAULT") | .url' | head -1)
 echo ""
 echo "Deployment complete"
 echo "  Runtime:  $RUNTIME_NAME ($RUNTIME_ID)"

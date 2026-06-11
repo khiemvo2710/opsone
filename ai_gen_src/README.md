@@ -26,14 +26,16 @@ Monorepo Go + MySQL cho **OpsOne** — spec: `../OpsOne.md`
 - `internal/rules` — engine rules 1–9 (§7.3), deterministic trước LLM
 - `internal/output` — template tiếng Việt: Incident, Routing Plan, Maintenance, Health
 - `internal/agent/reasoning.go` — ghi `incidents`, `routing_plans`, `recommendations`; auto routing + auto maintenance khi `ShouldAutoApplyScope`; force bypass chu kỳ: `ShouldForceAutoRouting`, `ShouldForceAutoMaintenanceAllProviders`, `ShouldForceAutoMaintenance`
-- LLM: fallback template khi `LLM_API_URL` trống (§7.6)
+- LLM scheduler: fallback template khi chưa gọi LLM summary (§7.6); chat on-demand §7.6.5 tách riêng
 
 ### Phase 5 — REST API + SSE ✅
 - `cmd/api` — HTTP server `:8080` (§2.3)
 - `internal/api` — handlers, CORS, `DEV_AUTH_BYPASS`, SSE poll 5s
 - `GET /dashboard/overview` — ẩn `pending_plan` / `pending_maintenance` khi `ShouldAutoApplyScope=true`; poll auto apply (`autoApplyScopeFromSnapshot`, tối đa 2 pass routing→bảo trì). Từ chối routing/bảo trì → poll tiếp có thể sinh đề xuất mới (không cooldown).
 - `POST .../maintenance/extend` — **400** `no_change` khi gia hạn không đổi thời gian (`CountActiveMaintenanceForSKU`)
-- Endpoints: health-status, config, incidents (phân trang), scopes auto/routing/maintenance, maintenance, chat (stub), `/events`
+- Endpoints: health-status, config, incidents (phân trang), scopes auto/routing/maintenance, maintenance, **`POST /chat` LLM agent §7.6.5** (stub keyword khi không có `LLM_API_KEY`), `/events`
+- **`internal/llm`** — OpenAI-compatible client (GreenNode AIP); **`internal/api/chat_agent.go`** — tool calling + session memory
+- **`internal/chatresolve`** — alias dịch vụ chat (`topup mobi` → `TOPUP_MOBI`; provider chỉ ESALE/IMEDIA/SHOPPAY)
 - Integration test: `$env:OPSONE_INTEGRATION=1; go test ./internal/api/... -v` — gồm `TestProductScopeAutoPutOverview`, `TestConfigPutMaintenanceDefaultDuration`
 
 ### Phase 6 — Frontend React ✅
@@ -48,7 +50,7 @@ Monorepo Go + MySQL cho **OpsOne** — spec: `../OpsOne.md`
 - **`ScopeAutoEditor`** — chế độ BT/routing cấp dịch vụ + SKU; compact + ⋯; **Lưu** riêng (`PUT /scopes/.../auto`, không dùng Lưu hàng Ngưỡng); `patchOverviewCache` + refetch; ẩn hàng đề xuất khi `ShouldAutoApplyScope` (`utils/scopeAuto.ts`, `ResolveEffectiveScopeAuto`)
 - **Mở lại** provider — hàng *Mở lại provider*: **Trả lại** → baseline; **Lưu** → `restore-baseline` (baseline) hoặc `routing/apply` (tùy chỉnh)
 - **Mở lại dịch vụ** — `POST .../maintenance/reopen-service` (atomic baseline + grace)
-- Chat widget — kéo dock 4 góc (`useChatDock`); voice `vi-VN` (`useVoiceInput`)
+- Chat widget — panel ~800×780px; nhãn **Bạn/OpsOne**; kéo dock 4 góc (`useChatDock`); voice `vi-VN`; LLM + alias dịch vụ §7.6.5; Admin duyệt qua chat khi yêu cầu rõ
 - SSE `/events` + poll 60s fallback
 - Dev: `VITE_DEV_AUTH_BYPASS=true` (header `X-OpsOne-Role`); production: MSAL.js §2.6.4
 
@@ -89,7 +91,7 @@ cd ai_gen_src
 # Helpers (optional)
 . .\scripts\dev.ps1
 
-copy .env.example .env
+copy .env.example .env   # LLM_API_KEY, LLM_MODEL=minimax/minimax-m2.5, …
 Invoke-OpsOneReset
 
 go test ./...
@@ -97,12 +99,17 @@ $env:OPSONE_INTEGRATION="1"; go test ./... -v
 .\scripts\e2e.ps1
 ```
 
-### Chạy workers
+**LLM chat:** `LLM_API_KEY` + `LLM_MODEL=minimax/minimax-m2.5` trong `.env`. API tự đọc `.env` khi chạy từ `ai_gen_src/`; khuyến nghị `.\scripts\run-api.ps1`.
+
+**Alias chat (`internal/chatresolve`):** trước tool call, `NormalizeToolArgs` map viết tắt → `product_code`. Ví dụ: `topup mobi` → `TOPUP_MOBI`; `thẻ zing` → `ZING`; `data vina` → `DATA_VINA`. Provider routing: `ESALE`, `IMEDIA`, `SHOPPAY` (mobi/vina/viettel **không** phải provider). Bảng đầy đủ: [`OpsOne.md` §7.6.5](../OpsOne.md).
+
+### Chạy workers + API
 
 ```powershell
 go run ./cmd/worker-mock
 go run ./cmd/worker-agent
-go run ./cmd/api
+.\scripts\run-api.ps1          # khuyến nghị: nạp .env + kill port + API
+# hoặc: go run ./cmd/api       # cần nạp env thủ công
 cd web; npm run dev
 # http://localhost:5173
 ```
@@ -121,8 +128,9 @@ npm run dev
 ```text
 ai_gen_src/
 ├── cmd/api, worker-mock, worker-agent
-├── internal/agent, api, store, tools, …
+├── internal/agent, api, chatresolve, llm, store, tools, …
 ├── db/schema.sql, seed.sql
+├── scripts/run-api.ps1, dev.ps1
 └── web/src/
     ├── components/   # ServiceOverviewTable, ScopeAutoEditor, ProductThresholdEditor, …
     ├── hooks/        # useChatDock, useSSE, useVoiceInput, useOverallHealth, useMaintenanceDefaultDurationMin
@@ -130,4 +138,4 @@ ai_gen_src/
     └── pages/        # Dashboard, IncidentsPage, Settings, …
 ```
 
-Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §9.0 Dashboard, §9.5 Cấu hình (compact), §9.5.2 Chế độ BT / Routing, §9.5.5 Thời lượng BT mặc định.
+Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §7.6.5 Chat LLM, §9.0 Dashboard, §9.5 Cấu hình (compact), §9.5.2 Chế độ BT / Routing, §9.5.5 Thời lượng BT mặc định.

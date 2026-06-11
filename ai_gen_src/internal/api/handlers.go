@@ -474,7 +474,13 @@ func (s *Server) handleChatPost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_input", "Thiếu message")
 		return
 	}
-	reply := s.chatReply(r.Context(), body.Message)
+	isAdmin := requireAdminSilent(r, s.Config.DevAuthBypass)
+	actor := actorFromRequest(r, s.Config.DevAuthBypass)
+	reply, err := s.chatAgentReply(r.Context(), body.SessionID, body.Message, actor, isAdmin)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "llm_error", err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": body.SessionID,
 		"reply":      reply,

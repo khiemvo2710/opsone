@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { api } from '../api/client';
+import { api, ApiClientError } from '../api/client';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useChatDock } from '../hooks/useChatDock';
+import { RESIZE_CORNERS, useChatResize } from '../hooks/useChatResize';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -15,9 +16,12 @@ export function ChatWidget() {
   const [input, setInput] = useState('');
   const [sessionId] = useState(() => crypto.randomUUID());
   const feedRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const widgetRef = useRef<HTMLDivElement>(null);
   const { corner, floatPos, isDragging, onDragStart, onDragMove, onDragEnd, consumeDragClick } =
     useChatDock(widgetRef);
+  const { size, isResizing, activeCorner, onResizeStart, onResizeMove, onResizeEnd } =
+    useChatResize(widgetRef);
 
   const scrollFeedToBottom = useCallback(() => {
     const feed = feedRef.current;
@@ -38,7 +42,16 @@ export function ChatWidget() {
     onSuccess: (data) => {
       setMessages((prev) => [...prev, { role: 'assistant', text: data.reply }]);
     },
+    onError: (err: Error) => {
+      const text = err instanceof ApiClientError ? err.message : 'Chat thất bại — thử lại.';
+      setMessages((prev) => [...prev, { role: 'assistant', text }]);
+    },
   });
+
+  useEffect(() => {
+    if (!open) return;
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -63,6 +76,7 @@ export function ChatWidget() {
 
   const handleHeaderPointerDown = (e: React.PointerEvent<HTMLElement>) => {
     if ((e.target as HTMLElement).closest('.chat-widget__close')) return;
+    if ((e.target as HTMLElement).closest('.chat-widget__resize-handle')) return;
     onDragStart(e);
   };
 
@@ -77,7 +91,13 @@ export function ChatWidget() {
     }
   };
 
+  const handleWidgetPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    onResizeMove(e);
+    onDragMove(e);
+  };
+
   const handleWidgetPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (onResizeEnd(e)) return;
     finishDrag(e);
   };
 
@@ -88,19 +108,38 @@ export function ChatWidget() {
   return (
     <div
       ref={widgetRef}
-      className={`chat-widget chat-widget--${corner}${open ? ' chat-widget--open' : ''}${isDragging ? ' chat-widget--dragging' : ''}`}
+      className={`chat-widget chat-widget--${corner}${open ? ' chat-widget--open' : ''}${isDragging ? ' chat-widget--dragging' : ''}${isResizing ? ' chat-widget--resizing' : ''}`}
       style={dockStyle}
-      onPointerMove={onDragMove}
+      onPointerMove={handleWidgetPointerMove}
       onPointerUp={handleWidgetPointerUp}
-      onPointerCancel={finishDrag}
+      onPointerCancel={(e) => {
+        onResizeEnd(e);
+        finishDrag(e);
+      }}
     >
       {open ? (
-        <div className="chat-widget__panel">
+        <div
+          className="chat-widget__panel"
+          style={{ width: size.width, height: size.height, maxHeight: size.height }}
+        >
+          {RESIZE_CORNERS.map((corner) => (
+            <div
+              key={corner}
+              className={`chat-widget__resize-handle chat-widget__resize-handle--${corner}${isResizing && activeCorner === corner ? ' chat-widget__resize-handle--active' : ''}`}
+              role="presentation"
+              aria-hidden="true"
+              title="Kéo để đổi kích thước"
+              onPointerDown={onResizeStart(corner)}
+            />
+          ))}
           <header
             className="chat-widget__header chat-widget__drag-handle"
             onPointerDown={handleHeaderPointerDown}
           >
-            <strong>Chat OpsOne</strong>
+            <div className="chat-widget__title">
+              <strong>Chat OpsOne</strong>
+              <span className="chat-widget__subtitle">Tra cứu metric · Admin có thể duyệt qua chat</span>
+            </div>
             <button
               type="button"
               className="btn btn--ghost btn--xs chat-widget__close"
@@ -110,26 +149,30 @@ export function ChatWidget() {
               −
             </button>
           </header>
-          <p className="chat-widget__hint muted">Kéo header để đổi góc · Enter gửi</p>
 
           <div className="chat-widget__feed" ref={feedRef}>
             {messages.length === 0 && (
               <p className="muted chat-widget__empty">
-                Ví dụ: &quot;Trạng thái hệ thống&quot;, &quot;Sự cố gần nhất&quot;
+                Hỏi trạng thái, sự cố, metric… Admin có thể: &quot;Duyệt routing GARENA 10000&quot;
               </p>
             )}
             {messages.map((m, i) => (
               <div key={i} className={`chat-bubble chat-bubble--${m.role}`}>
-                {m.text}
+                <span className="chat-bubble__role">{m.role === 'user' ? 'Bạn' : 'OpsOne'}</span>
+                <div className="chat-bubble__body">{m.text}</div>
               </div>
             ))}
             {send.isPending && (
-              <div className="chat-bubble chat-bubble--assistant">Đang xử lý...</div>
+              <div className="chat-bubble chat-bubble--assistant">
+                <span className="chat-bubble__role">OpsOne</span>
+                <div className="chat-bubble__body chat-bubble__body--pending">Đang xử lý...</div>
+              </div>
             )}
           </div>
 
           <div className="chat-widget__input">
             <textarea
+              ref={inputRef}
               value={voice.state === 'listening' ? voice.transcript : input}
               onChange={(e) => {
                 voice.setTranscript(e.target.value);
@@ -137,7 +180,7 @@ export function ChatWidget() {
               }}
               onKeyDown={onInputKeyDown}
               placeholder="Nhập câu hỏi..."
-              rows={2}
+              rows={3}
             />
             <div className="chat-input__actions">
               {voice.supported && (

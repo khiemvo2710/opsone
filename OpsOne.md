@@ -376,8 +376,10 @@ Hiển thị trong khung chat + cập nhật panel Incident / Routing Plan
 ```bash
 MYSQL_DSN=app:secret@tcp(localhost:3306)/traffic_agent?parseTime=true
 DATA_SOURCE=mock                    # mock | production
-LLM_API_URL=                        # optional
-LLM_API_KEY=
+LLM_API_URL=                        # optional; mặc định GreenNode AIP §7.6.7
+LLM_API_KEY=                        # bật chat LLM khi set (alias AIP_API_KEY)
+LLM_MODEL=minimax/minimax-m2.5      # id từ GET .../v1/models (phân biệt hoa/thường)
+LLM_TIMEOUT_SECONDS=30
 API_ADDR=:8080
 CORS_ORIGIN=http://localhost:5173
 # Email (§8.9) — hackathon: MailHog localhost:1025
@@ -477,13 +479,15 @@ opsone/
 │   ├── threshold/           # Đánh giá ngưỡng per product §1.2 / §7.5
 │   ├── reasoning/           # LLM client + prompt builder
 │   ├── health/              # health_status green/yellow/red §8.2
-│   ├── api/                 # REST + SSE §2.3 — dashboard.go, dashboard_suggest.go (synthetic), handlers_scope_actions.go (duyệt scope), serialize.go
-│   └── chat/                # On-demand session §9 (stub)
+│   ├── api/                 # REST + SSE §2.3; chat agent §7.6.5 — chat_agent.go, chat_actions.go, …
+│   ├── chatresolve/         # Alias dịch vụ/provider cho chat §7.6.5 (`topup mobi` → TOPUP_MOBI)
+│   └── llm/                 # OpenAI-compatible MaaS client §7.6.7 (GreenNode AIP)
 ├── db/
 │   ├── schema.sql           # copy từ §13
 │   └── seed.sql             # UTF-8 — nhãn tiếng Việt (Thẻ, đ); xem §13.11
 ├── scripts/
-│   └── dev.ps1              # Invoke-OpsOneReset, Start-OpsOneWeb, … (Windows)
+│   ├── dev.ps1              # Invoke-OpsOneReset, Start-OpsOneAPI/Web, … (Windows)
+│   └── run-api.ps1          # nạp `.env`, giải phóng port `API_ADDR`, `go run ./cmd/api`
 ├── web/                     # React app (Phase 6 ✅)
 │   ├── dev.ps1              # npm run dev — fix PATH Node trên Windows
 │   ├── src/
@@ -589,7 +593,7 @@ Base URL: `http://localhost:8080/api/v1`
 | POST   | `/notifications/test`          | `NotificationsTest`    | Admin gửi mail thử                                |
 | GET    | `/escalation-chat`             | `EscalationChatList`   | Cấu hình app/nhóm/tag theo provider               |
 | PUT    | `/escalation-chat`             | `EscalationChatPut`    | Admin cập nhật leo thang chat                     |
-| POST   | `/chat`                        | `ChatPost`             | `{ "message", "session_id?" }`                    |
+| POST   | `/chat`                        | `ChatPost`             | `{ "message", "session_id?" }` → `{ "reply", "session_id" }`; LLM agent §7.6.5; **502** `llm_error` nếu MaaS lỗi |
 | GET    | `/chat/sessions/{id}`          | `ChatHistory`          |                                                   |
 | GET    | `/products`                    | `ProductsList`         | Catalog §1.1 + ngưỡng tóm tắt                     |
 | GET    | `/products/{code}/routing`     | `ProductRoutingGet`    | Baseline + traffic + `pending_restore` per scope/SKU §8.6.5 |
@@ -806,7 +810,7 @@ Query: `page` (1-based, mặc định 1), `page_size` (mặc định 10, max 50)
 | `VITE_DEV_AUTH_BYPASS` | `true` | Gửi header admin tới API |
 | `VITE_AAD_*` | (trống) | Bật MSAL khi có tenant/client (§2.6.4) |
 
-**Chạy local (4 terminal):** `docker compose up -d` · `go run ./cmd/worker-mock` · `go run ./cmd/worker-agent` · `go run ./cmd/api` · `cd web && .\dev.ps1`
+**Chạy local (4 terminal):** `docker compose up -d` · `go run ./cmd/worker-mock` · `go run ./cmd/worker-agent` · `.\scripts\run-api.ps1` (Windows; hoặc `go run ./cmd/api` + nạp `.env`) · `cd web && .\dev.ps1`
 
 **Seed Windows:** `scripts/dev.ps1` → `Invoke-OpsOneReset` — `Wait-OpsOneMysqlReady` (poll tối đa 120s) rồi **`docker cp` + `mysql source`** + `--default-character-set=utf8mb4` (giữ UTF-8 trong `seed.sql` — không pipe stdin PowerShell).
 
@@ -826,7 +830,7 @@ Query: `page` (1-based, mặc định 1), `page_size` (mặc định 10, max 50)
 | 7   | `internal/agent` — dry-run 1 cycle                              | Ghi `agent_analysis_cycles`          |
 | 8   | `cmd/worker-agent` — chạy nền                                   | Incident + health_status xuất hiện   |
 | 9   | `cmd/api` — REST                                                | `curl /health-status`                |
-| 10  | React Dashboard — bảng routing §9.0 + incidents + HealthBadge   | F5 sau `go run ./cmd/api`            |
+| 10  | React Dashboard — bảng routing §9.0 + incidents + HealthBadge   | F5 sau `run-api.ps1` / `go run ./cmd/api` |
 | 11  | React Dashboard — ngưỡng per product §9.5.3 + Auto per dịch vụ/SKU §9.5.2 + metric live | §10.11                               |
 | 12  | Scenario A–D — routing output                                   | §10.1–10.4                           |
 | 13  | React Chat + voice                                              | §10.5                                |
@@ -843,14 +847,14 @@ Query: `page` (1-based, mặc định 1), `page_size` (mặc định 10, max 50)
 ```makefile
 migrate:  mysql -u root -p traffic_agent < db/schema.sql
 seed:     mysql -u root -p traffic_agent < db/seed.sql
-run-api:  go run ./cmd/api
+run-api:  pwsh -File scripts/run-api.ps1   # Windows: nạp .env + kill port trước khi start
 run-mock: go run ./cmd/worker-mock
 run-agent: go run ./cmd/worker-agent
 run-web:  cd web && npm run dev
 test:     go test ./...
 ```
 
-**PowerShell (`scripts/dev.ps1`):** `Invoke-OpsOneReset` (chờ MySQL ready → DROP + CREATE `schema.sql` + `seed.sql`) · `Invoke-OpsOneClearRuntime` · `Invoke-OpsOneE2E` · …
+**PowerShell (`scripts/dev.ps1`):** `Invoke-OpsOneReset` (chờ MySQL ready → DROP + CREATE `schema.sql` + `seed.sql`) · `Start-OpsOneAPI` (`run-api.ps1` — nạp `.env`, kill port `:8080`, chạy API) · `Invoke-OpsOneClearRuntime` · `Invoke-OpsOneE2E` · …
 
 ---
 
@@ -2527,41 +2531,73 @@ OUTPUT (plain text — KHÔNG markdown):
 }
 ```
 
-#### 7.6.5 Chat Agent Prompt — On-demand chat/voice (§9)
+#### 7.6.5 Chat Agent — On-demand chat/voice (§9) ✅ triển khai
 
-File: `internal/reasoning/prompts/chat_agent.txt`
+**Code:** `internal/api/chat_agent.go`, `internal/api/chat_actions.go`, `internal/chatresolve/aliases.go`, `internal/llm/client.go` — `POST /api/v1/chat` `{ "message", "session_id?" }`.
+
+| Trạng thái | Hành vi |
+|------------|---------|
+| `LLM_API_KEY` **có** | Agent loop OpenAI-compatible (GreenNode AIP), tool calling tối đa **6 vòng**; session in-memory tối đa **40** message/`session_id` |
+| `LLM_API_KEY` **trống** | Fallback keyword stub (`handlers.go` — health/incident cơ bản) |
+
+**System prompt** (`chatSystemPrompt`): tiếng Việt; admin vs non-admin; **danh mục product** load từ DB + gợi ý viết tắt; quy tắc mobi/vina/viettel là **dịch vụ** không phải provider.
+
+**Alias dịch vụ (`internal/chatresolve`):** trước khi gọi tool, args được `NormalizeToolArgs` — map tên ops sang `product_code` / provider routing.
+
+| Viết tắt user (ví dụ) | `product_code` |
+|------------------------|----------------|
+| topup mobi, nap mobifone, mobi topup | `TOPUP_MOBI` |
+| topup vina, nap vinaphone | `TOPUP_VINA` |
+| topup viettel | `TOPUP_VIETTEL` |
+| thẻ zing, zing | `ZING` |
+| thẻ garena, garena | `GARENA` |
+| thẻ mobi, mobifone | `MOBIFONE` |
+| data mobi / data vina / data viettel | `DATA_MOBI` / `DATA_VINA` / `DATA_VIETTEL` |
+
+| Provider routing (không phải nhà mạng) | `ESALE`, `IMEDIA`, `SHOPPAY` |
+
+**Gộp lỗi LLM:** `product=topup` + `provider=mobi` → `TOPUP_MOBI` (bỏ provider sai). `get_metrics` **không** truyền provider → backend trả metric **cả 3** provider (ESALE/IMEDIA/SHOPPAY).
+
+**Tool tra cứu** (mọi user `Ops`):
+
+| Tool | Mô tả |
+|------|--------|
+| `get_metrics` | success/pending/fail + GD; `product` viết tắt OK; `provider` tuỳ chọn (bỏ trống = cả 3) |
+| `get_top_errors` | mã lỗi top |
+| `get_routing` | tỉ lệ routing product (chỉ cần product — phù hợp câu hỏi tổng quan topup) |
+| `get_maintenance` | cửa sổ BT active/scheduled |
+| `get_incidents` | sự cố gần đây |
+| `list_pending_actions` | routing plan + đề xuất bảo trì chờ duyệt |
+
+**Tool duyệt** — chỉ khi request có role **Admin** (`X-OpsOne-Role: admin` dev / JWT prod) **và** user **yêu cầu rõ** duyệt/từ chối:
+
+| Tool | Mô tả |
+|------|--------|
+| `approve_routing_plan` / `reject_routing_plan` | theo `plan_id` |
+| `approve_scope_routing` / `reject_scope_routing` | theo `product` (+ `sku?`) |
+| `approve_scope_maintenance` / `reject_scope_maintenance` | đề xuất BT scope |
+
+**Quy tắc:**
+
+1. Gọi `list_pending_actions` trước khi duyệt nếu chưa biết `plan_id`/scope.
+2. User không phải Admin → **không** gọi tool duyệt; hướng dẫn Dashboard.
+3. Không expose trực tiếp `UpdateRouting` / `SetMaintenance` — duyệt qua API scope giống UI Admin.
+4. Câu hỏi ngoài vận hành → từ chối lịch sự.
+
+**Ví dụ:**
 
 ```text
-{{system}}
+USER: "Tình hình topup mobi hiện tại ok không?"
+→ Map TOPUP_MOBI → get_routing + get_metrics (cả 3 provider) → tóm tắt tiếng Việt.
 
-VAI TRÒ THÊM: Bạn là chat assistant cho ops trong OpsOne UI.
-Ops có thể gõ text hoặc nói qua voice (đã STT).
-
-CÔNG CỤ ĐƯỢC PHÉP DÙNG (chỉ khi cần thiết — KHÔNG gọi vu vơ):
-- GetMetrics(product, provider, sku?, window?)
-- GetTopErrors(product, provider, window?)
-- GetRouting(product, sku?)
-- GetMaintenance(product, provider?, sku?)
-- GetIncidents(since?)
-
-QUY TẮC TOOL CALLING:
-1. Nếu câu hỏi trả lời được bằng context đã load → KHÔNG gọi tool.
-2. Một câu hỏi → tối đa 3 tool call. Nếu cần hơn → trả "cần admin mở dashboard".
-3. Tool nào không có trong list trên → từ chối lịch sự.
-4. Sau khi nhận tool result → tóm tắt 2–3 câu, không liệt kê raw JSON.
-
-VÍ DỤ HỘI THOẠI:
 USER: "Tại sao ESALE TOPUP_VINA fail tăng?"
-→ Gọi GetMetrics(TOPUP_VINA, ESALE) + GetTopErrors(TOPUP_VINA, ESALE)
-→ Trả lời: "ESALE TOPUP_VINA đang fail 13% (15 phút gần nhất), lỗi đầu bảng -3004 (timeout, 142 lượt).
-   OpsOne đã đề xuất chuyển 60% traffic sang IMEDIA. Mở tab Routing Plan để duyệt."
+→ get_metrics(TOPUP_VINA, ESALE) + get_top_errors → tóm tắt 2–3 câu tiếng Việt.
 
-USER: "Khôi phục routing TOPUP_VINA"
-→ KHÔNG tự gọi mutate routing/bảo trì (action cần admin duyệt trên Dashboard).
-→ Trả lời: "Để khôi phục routing, dùng **Mở lại provider** hoặc **Mở lại dịch vụ** trên Dashboard."
+USER (Admin): "Duyệt routing plan đang chờ cho TOPUP_VINA"
+→ list_pending_actions → approve_scope_routing hoặc approve_routing_plan → báo kết quả.
 
-USER: "Thời tiết hôm nay sao?"
-→ "Mình chỉ hỗ trợ về vận hành OpsOne (incident, routing, metric). Bạn cần xem gì?"
+USER: "Khôi phục routing TOPUP_VINA" (chưa yêu cầu duyệt)
+→ Hướng dẫn **Mở lại provider** / **Mở lại dịch vụ** trên Dashboard.
 ```
 
 #### 7.6.6 Guardrails LLM
@@ -2578,14 +2614,27 @@ USER: "Thời tiết hôm nay sao?"
 
 #### 7.6.7 Cấu hình LLM
 
+**Chat agent (triển khai):** file `ai_gen_src/.env`. `config.Load()` **tự đọc** `.env` trong thư mục làm việc (không ghi đè biến env đã set sẵn). Khuyến nghị dev: `scripts/run-api.ps1` (nạp `.env` + kill port `:8080` + log `LLM chat: enabled model=…`).
+
 ```bash
-# .env
-LLM_PROVIDER=openai            # openai | azure_openai | local_ollama
+# ai_gen_src/.env — GreenNode AI Platform (MaaS, OpenAI-compatible)
+LLM_API_URL=https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1   # optional; default nếu trống
+LLM_API_KEY=<AIP-key>          # alias AIP_API_KEY; trống → chat stub keyword
+LLM_MODEL=minimax/minimax-m2.5 # id từ GET .../v1/models — chuẩn hóa lowercase khi load
+LLM_TIMEOUT_SECONDS=30
+```
+
+**Lấy model id:** `curl -H "Authorization: Bearer $LLM_API_KEY" https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1/models` → dùng đúng `id` (phân biệt hoa/thường). Bật model trên [AI Platform Console](https://aiplatform.console.vngcloud.vn/models).
+
+**Reasoning scheduler (Phase 4):** vẫn fallback template tiếng Việt khi chưa gọi LLM summary; biến `LLM_API_URL`/`LLM_API_KEY` dùng chung config.
+
+**Tuỳ chọn provider khác (OpenAI, Ollama, Azure):**
+
+```bash
 LLM_API_URL=https://api.openai.com/v1
 LLM_API_KEY=sk-...
-LLM_MODEL=gpt-4o-mini          # hoặc Azure deployment name, hoặc llama3.1:8b cho local
-LLM_TIMEOUT_SECONDS=10
-LLM_ENABLED=true               # false → dùng template offline §i18n
+LLM_MODEL=openai/gpt-4o-mini
+LLM_TIMEOUT_SECONDS=30
 ```
 
 #### 7.6.8 Checklist Prompt Engineering
@@ -3662,7 +3711,7 @@ Khi nhóm SKU cùng `product_code` (`routing_mode=sku`, ≥2 dòng SKU) — ô *
 
 **Navigation (`Layout.tsx`):** Menu **tab ngang trên header** — Dashboard · Bảo trì · Lịch sử · Cấu hình (không còn sidebar trái). Badge 🟢🟡🔴 global cạnh logo OpsOne.
 
-**Chat (`ChatWidget.tsx` + `useChatDock.ts`):** Widget nổi — **kéo** nút Chat hoặc header panel để **dock** một trong **4 góc** màn hình; vị trí lưu `localStorage` (`opsone-chat-corner`). **Enter** gửi, **Shift+Enter** xuống dòng; tự cuộn feed; voice `vi-VN` khi trình duyệt hỗ trợ. Không còn route `/chat` riêng.
+**Chat (`ChatWidget.tsx` + `useChatDock.ts`):** Widget nổi panel **~800×780px** (mobile ~full width / 88vh); nhãn bubble **Bạn / OpsOne**; phản hồi AI full-width, `pre-wrap`; **một vùng scroll** trên feed (không scrollbar lồng trong bubble). **Kéo** nút Chat hoặc header để **dock** 4 góc; vị trí `localStorage` (`opsone-chat-corner`). **Enter** gửi, **Shift+Enter** xuống dòng; voice `vi-VN`. Không route `/chat` riêng.
 
 UI là **mặt tiếp xúc với người vận hành** — dùng được trên **điện thoại** và **PC**, nhận lệnh qua **chat** hoặc **micro**.
 
@@ -4215,7 +4264,7 @@ Schema mở rộng (chưa expose hết trên UI):
 - [x] Cột **Chế độ BT / Routing** — `ScopeAutoEditor` per SKU + cột Dịch vụ (sku-mode); compact + ⋯ (Chỉ đề xuất / Tự động / Tự động theo khung giờ); overview tách `product_auto_action` / `scope_auto_action` / `auto_action` hiệu lực §9.5.2; Lưu riêng (không dùng Lưu hàng Ngưỡng).
 - [x] Bảng metric — scroll ngang nhẹ khi cần; `table-layout: fixed`, truncate + tooltip.
 - [x] `GET /incidents?page=&page_size=` — phân trang full-width; **không** route `/incidents/:id` trên UI.
-- [x] `ChatWidget` + `useChatDock` (kéo dock 4 góc) + `useVoiceInput` (Web Speech `vi-VN`); Enter gửi; auto-scroll feed.
+- [x] `ChatWidget` + `useChatDock` + `useVoiceInput`; panel lớn (~800px); alias chat §7.6.5 (`chatresolve`)
 - [x] `/settings` — card compact §9.5: scheduler + **thời lượng BT mặc định** (§9.5.5) + mock (`normalizeConfig` fallback 60); select kịch bản **full-width**.
 - [x] Dev: `web/dev.ps1`, `VITE_DEV_AUTH_BYPASS`, proxy Vite → API.
 - [ ] MSAL O365 production (`VITE_AAD_*`); §2.6 JWT middleware đầy đủ.
@@ -4331,12 +4380,13 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 **Tình huống:** Ops đang di chuyển, mở UI trên **điện thoại** sau khi scheduler sinh Incident #20260604-001 (ZING SKU 20k).
 
 1. UI feed hiển thị card Sự cố mức Cao — tap mở chi tiết.
-2. **Chat:** gõ *"Tại sao ESALE 20k fail tăng?"* → Agent gọi GetMetrics / GetTopErrors → trả lời nguyên nhân.
+2. **Chat:** gõ *"Tình hình topup mobi?"* → alias `TOPUP_MOBI` §7.6.5 → `get_routing` + `get_metrics` (cả 3 provider) → tóm tắt tiếng Việt. Hoặc *"Tại sao ESALE 20k fail tăng?"* → `get_metrics` + `get_top_errors`.
 3. **Voice:** nhấn micro, nói *"Đề xuất routing cho mệnh giá hai mươi nghìn"* → STT → cùng câu hỏi qua `/chat` → Agent trả Routing Plan.
 4. Trên **desktop** cùng tài khoản: Dashboard §9.0 — bảng routing (hàng con *Kế hoạch routing* dưới SKU) + bảng incidents + `ChatWidget` góc phải dưới (cùng dữ liệu).
 5. (Tuỳ chọn) Ops bấm **Duyệt** trên hàng kế hoạch (cột Bảo trì, căn phải) → UpdateRouting thực thi.
+6. (Tuỳ chọn, **Admin**) Chat: *"Liệt kê việc chờ duyệt"* → *"Duyệt routing TOPUP_VINA"* — agent gọi `list_pending_actions` + tool duyệt §7.6.5 (cần `LLM_API_KEY` + role Admin).
 
-**Kết quả kỳ vọng:** Chat và voice cho cùng kết quả; UI usable trên mobile và PC.
+**Kết quả kỳ vọng:** Chat và voice cho cùng kết quả; UI usable trên mobile và PC; chat thông minh khi cấu hình GreenNode AIP.
 
 ### 10.6 Kịch bản F — Scheduler & auto routing per dịch vụ / SKU (UI)
 
@@ -4504,7 +4554,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 ### Phase 5 — REST API ✅ (triển khai `ai_gen_src`)
 
 - [x] `cmd/api` — `:8080`; CORS `http://localhost:5173`
-- [x] Handlers §2.3: `health-status`, `dashboard/overview` (live đề xuất + ẩn khi `ShouldAutoApplyScope` + refresh pending plan), `config`, `PUT /scopes/.../auto`, `POST /scopes/.../routing/approve|apply|restore-baseline|reject`, `POST /scopes/.../maintenance/approve|reject|cancel|reopen-service|extend`, `incidents` phân trang, `routing-plans`, `recommendations/approve|reject`, `maintenance`, `notifications`, `products`, `metrics`, `mock`, `chat` (stub), SSE `/events`
+- [x] Handlers §2.3: … `mock`, **`POST /chat` — LLM agent §7.6.5** (stub keyword khi không có `LLM_API_KEY`), SSE `/events`
 - [x] JSON **snake_case** — `internal/api/serialize.go`; config PUT `scheduler_interval_min`, …
 - [x] `DEV_AUTH_BYPASS` + header `X-OpsOne-Role` (dev); `POST .../approve`
 - [x] Integration test `internal/api/server_test.go` — health, config audit, incident get, `TestProductScopeAutoPutOverview`, `TestConfigPutMaintenanceDefaultDuration` (`maintenance_default_duration_min`)
@@ -4530,7 +4580,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 - [x] Audit: `config_audit_log` sau PUT config; incidents, dashboard overview
 - [x] `make test-e2e`, `scripts/e2e.ps1`, `Invoke-OpsOneE2E`; Makefile seed UTF-8 (`docker cp`)
 - [x] Tài liệu vận hành ngắn trong `README.md` (ai approve / auto)
-- [ ] Toàn bộ §10 **B–F, J–L** (maintenance ZING, chat/voice E2E, email ngưỡng live, baseline checkbox)
+- [ ] Toàn bộ §10 **B–F, J–L** (maintenance ZING, chat/voice + **chat duyệt Admin** E2E, email ngưỡng live, baseline checkbox)
 - [ ] Alert worker crash; React test CI
 - **DoD §12** — demo end-to-end **không** nối production: `docker compose up` + 3 binary + `.\scripts\e2e.ps1`
 
@@ -5694,7 +5744,7 @@ export const TOOLS_OPENAI = [
 ];
 ```
 
-**Lưu ý cho chat agent (§7.6.5):** LLM chỉ thấy 6 **đọc-only** tool (GetMetrics, GetTopErrors, GetProviders, GetSkus, GetRouting, GetMaintenance) + `GetIncidents`. Tuyệt đối **không expose** `UpdateRouting` / `SetMaintenance` trong tool list của chat agent — mọi mutate qua UI Admin.
+**Lưu ý cho chat agent (§7.6.5):** Tool tra cứu + `list_pending_actions`; args qua `chatresolve.NormalizeToolArgs`. Admin thêm 6 tool duyệt/từ chối — **không** expose trực tiếp `UpdateRouting` / `SetMaintenance`.
 
 ### 14.6 Checklist Tool Contracts
 
@@ -5931,7 +5981,7 @@ Cho production rollout nhẹ, không tự quản hạ tầng. **Tách 3 layer ra
 | **Worker agent** | **Railway** service `opsone-worker-agent` | Cùng image; ARG `BINARY=worker-agent`; ENV MySQL + LLM |
 | **Database** | **Aiven MySQL** plan startup | MySQL 8; copy `DATABASE_URL` vào 3 Railway services |
 | **SMTP** | **SendGrid** (hoặc AWS SES) | API key → ENV `SMTP_*` |
-| **LLM** | **OpenAI** / **Azure OpenAI** | API key, model = gpt-4o-mini hoặc Azure deployment |
+| **LLM (chat)** | **GreenNode AIP** (MaaS OpenAI-compatible) | `LLM_API_KEY`, `LLM_MODEL=minimax/minimax-m2.5` (hoặc id từ `/v1/models`) |
 
 **Railway `railway.json`** (tuỳ chọn — IaC):
 
@@ -6058,11 +6108,10 @@ mysql "$DATABASE_URL" -e "DELETE FROM mock_metrics WHERE recorded_at < NOW() - I
 | `SMTP_USER` / `SMTP_PASS` | ✓ | | |
 | `SMTP_FROM` | ✓ | | `opsone@company.com` |
 | `NOTIFICATION_MOCK` | ✗ | Bật → chỉ log, không gửi | `false` |
-| `LLM_PROVIDER` | ✗ | `openai`/`azure_openai`/`local_ollama` | `openai` |
-| `LLM_API_URL` | có nếu enabled | | |
-| `LLM_API_KEY` | có nếu enabled | | |
-| `LLM_MODEL` | có nếu enabled | | `gpt-4o-mini` |
-| `LLM_ENABLED` | ✓ | false → dùng template Việt tĩnh | `true` |
+| `LLM_API_URL` | có nếu chat LLM | MaaS base URL; trống → `https://maas-llm-aiplatform-hcm.api.vngcloud.vn/v1` | |
+| `LLM_API_KEY` | có nếu chat LLM | Alias `AIP_API_KEY`; trống → chat stub | |
+| `LLM_MODEL` | có nếu chat LLM | id từ `GET /v1/models` | `minimax/minimax-m2.5` |
+| `LLM_TIMEOUT_SECONDS` | ✗ | Timeout HTTP chat agent | `30` |
 | `AGENT_LOCALE` | ✓ | | `vi-VN` |
 
 ### 15.6 Health checks & observability

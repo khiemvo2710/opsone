@@ -157,15 +157,6 @@ func (db *DB) LatestDismissedMaintenanceCycleForScope(ctx context.Context, produ
 
 // LatestPendingMaintenanceForScope returns the newest maintenance recommendation for product+sku.
 func (db *DB) LatestPendingMaintenanceForScope(ctx context.Context, product, sku string) (PendingRecommendation, bool, error) {
-	const query = `
-		SELECT id, product_code, action_type, action_detail, created_at
-		FROM recommendations
-		WHERE product_code = ? AND action_type = 'maintenance'
-		  AND action_detail NOT LIKE '%DISMISSED:%'
-		  AND action_detail LIKE ?
-		  AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-		ORDER BY created_at DESC
-		LIMIT 1`
 	pattern := "%"
 	extraFilter := ""
 	if sku != "" {
@@ -174,7 +165,16 @@ func (db *DB) LatestPendingMaintenanceForScope(ctx context.Context, product, sku
 		// Provider-level scope (topup): không lấy recommendation gắn SKU thẻ/data.
 		extraFilter = ` AND action_detail NOT LIKE 'SKU %'`
 	}
-	return scanPendingRecommendationRow(ctx, db, query+extraFilter, product, pattern)
+	query := `
+		SELECT id, product_code, action_type, action_detail, created_at
+		FROM recommendations
+		WHERE product_code = ? AND action_type = 'maintenance'
+		  AND action_detail NOT LIKE '%DISMISSED:%'
+		  AND action_detail LIKE ?` + extraFilter + `
+		  AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+		ORDER BY created_at DESC
+		LIMIT 1`
+	return scanPendingRecommendationRow(ctx, db, query, product, pattern)
 }
 
 func scanPendingRecommendationRow(ctx context.Context, db *DB, query string, args ...any) (PendingRecommendation, bool, error) {

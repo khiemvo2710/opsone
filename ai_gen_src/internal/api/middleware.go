@@ -49,3 +49,8 @@ func requireAdmin(w http.ResponseWriter, r *http.Request, bypass bool) bool {
 	writeError(w, http.StatusForbidden, "forbidden", "Cần quyền Admin")
 	return false
 }
+
+func requireAdminSilent(r *http.Request, bypass bool) bool {
+	role := strings.ToLower(roleFromRequest(r, bypass))
+	return role == "admin" || role == "administrator"
+}

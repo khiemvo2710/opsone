@@ -78,6 +78,10 @@ function Invoke-OpsOneE2E {
     & (Join-Path $PSScriptRoot "e2e.ps1") @PSBoundParameters
 }
 
+function Start-OpsOneAPI {
+    & (Join-Path $PSScriptRoot "run-api.ps1")
+}
+
 function Start-OpsOneMock {
     go run ./cmd/worker-mock
 }
@@ -100,7 +104,7 @@ function Add-OpsOneNodeToPath {
     }
 }
 
-Write-Host "Loaded: Invoke-OpsOneReset (DROP+CREATE schema + seed), Invoke-OpsOneClearRuntime, Invoke-OpsOneTest, Invoke-OpsOneE2E, Start-OpsOneMock, Start-OpsOneAgent, Start-OpsOneWeb, Add-OpsOneNodeToPath"
+Write-Host "Loaded: Invoke-OpsOneReset (DROP+CREATE schema + seed), Invoke-OpsOneClearRuntime, Invoke-OpsOneTest, Invoke-OpsOneE2E, Start-OpsOneAPI, Start-OpsOneMock, Start-OpsOneAgent, Start-OpsOneWeb, Add-OpsOneNodeToPath"
 
 if ($MyInvocation.InvocationName -ne '.') {
     Write-Host ''
