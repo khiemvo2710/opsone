@@ -23,3 +23,19 @@ Starter hãy lưu lại lịch trình dưới đây để không bỏ lỡ các 
 | **10/06**         | Training Workshop cho đội thi - Hướng dẫn sử dụng GreenNode AgentBase |
 | **22/06 - 03/07** | Cổng bình chọn AI Agent mở tự do cho tất cả Starter                   |
 | **03/07**         | 🏆 Lễ trao giải tại VNG Campus                                        |
+
+1.1.Đọc Rulebook trước khi build 
+Trước khi bắt đầu, tất cả Starters cần đọc kỹ rulebook để đảm bảo hành trình build agent được an 
+toàn và thành công. 
+Rulebook chính thức: https://greennode.ai/claw-a-thon-rulebook 
+1.2.Submission Requirements 
+Deadline nộp bài: 17/06/2026 lúc 12:00 (giờ Việt Nam) 
+Mỗi team cần nộp đủ các hạng mục sau (mục 1–3 bắt buộc, mục 4 tùy chọn): 
+1.Agent Source Code trên GitHub — đường dẫn đến các thông tin về agent trên Github 
+2.Video Demo — video demo dài 2–3 phút, trình bày agent hoạt động thực tế 
+3.Use Case Description — mô tả use case 100–200 chữ, giải thích agent giải quyết vấn đề gì  
+4.Agent Endpoint (Optional) — Đường link để sử dụng thử/test agent (Chỉ áp dụng với agent 
+theo dạng web-based)   
+⚠️ Lưu ý quan trọng: Tất cả đường link (Github link, video demo) phải để chế độ công khai 
+tại thời điểm nộp và trong suốt thời gian voting. Link private sẽ khiến bài dự thi không hợp lệ. 
+Trang nộp bài: https://greennode.ai/events/greennode-claw-a-thon 
