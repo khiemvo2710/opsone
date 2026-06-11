@@ -26,5 +26,5 @@ bin/
 Thumbs.db
 .DS_Store
 
-# Docker / local tools
-tools/
+# Docker / local tools (repo root only — not ai_gen_src/internal/tools)
+/tools/

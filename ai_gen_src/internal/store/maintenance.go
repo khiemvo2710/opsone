@@ -50,15 +50,27 @@ func (db *DB) ListInWindowMaintenanceMetricScopes(ctx context.Context, now time.
 }
 
 // ListActiveMaintenance returns scheduled/active windows for scope (§6.8).
+// provider and sku may be empty to match all providers / all SKUs for the product.
 func (db *DB) ListActiveMaintenance(ctx context.Context, product, provider, sku string) ([]MaintenanceWindow, error) {
-	const query = `
+	if product == "" {
+		return nil, fmt.Errorf("product is required")
+	}
+	query := `
 		SELECT maintenance_id, product_code, provider_code, sku_code, starts_at, ends_at, status, reason
 		FROM maintenance_windows
-		WHERE product_code = ? AND provider_code = ? AND sku_code = ?
-		  AND status IN ('scheduled', 'active')
-		  AND ends_at > NOW()
-		ORDER BY starts_at ASC`
-	rows, err := db.QueryContext(ctx, query, product, provider, sku)
+		WHERE product_code = ?
+		  AND status IN ('scheduled', 'active')`
+	args := []any{product}
+	if provider != "" {
+		query += ` AND provider_code = ?`
+		args = append(args, provider)
+	}
+	if sku != "" {
+		query += ` AND sku_code = ?`
+		args = append(args, sku)
+	}
+	query += ` ORDER BY sku_code ASC, provider_code ASC, starts_at ASC`
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list maintenance: %w", err)
 	}

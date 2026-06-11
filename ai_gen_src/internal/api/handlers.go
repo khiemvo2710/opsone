@@ -488,6 +488,9 @@ func (s *Server) handleChatPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) chatReply(ctx context.Context, msg string) string {
+	if reply, ok := s.tryChatMaintenanceReply(ctx, "", msg); ok {
+		return reply
+	}
 	lower := strings.ToLower(msg)
 	if strings.Contains(lower, "health") || strings.Contains(lower, "trạng thái") {
 		cycle, ok, _ := s.DB.GetLatestCycle(ctx)

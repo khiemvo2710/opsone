@@ -59,8 +59,8 @@ export function ChatWidget() {
     onSubmit: (raw) => {
       const msg = raw.trim();
       if (!msg || send.isPending) return;
-      setMessages((prev) => [...prev, { role: 'user', text: msg }]);
       setInput('');
+      setMessages((prev) => [...prev, { role: 'user', text: msg }]);
       send.mutate(msg);
     },
   });
@@ -193,12 +193,12 @@ export function ChatWidget() {
               {voice.supported && (
                 <button
                   type="button"
-                  className={`btn btn--mic${voice.state === 'listening' ? ' btn--mic-active' : ''}`}
-                  aria-label="Micro — nói xong, im lặng 2 giây để tự gửi"
-                  title="Nói lệnh; im lặng 2 giây sẽ tự gửi"
+                  className={`btn btn--mic${voice.micOn ? ' btn--mic-active' : ''}`}
+                  aria-label={voice.micOn ? 'Tắt micro' : 'Bật micro — hội thoại liên tục'}
+                  title={voice.micOn ? 'Bấm để tắt micro' : 'Bật micro; im lặng 2 giây sẽ gửi từng câu'}
                   onClick={voice.start}
                 >
-                  Mic
+                  {voice.micOn ? 'Mic ●' : 'Mic'}
                 </button>
               )}
               <button
@@ -211,8 +211,10 @@ export function ChatWidget() {
               </button>
             </div>
           </div>
-          {voice.supported && voice.state === 'listening' && (
-            <p className="voice-hint chat-widget__voice">Đang nghe… ngừng nói 2 giây sẽ tự gửi.</p>
+          {voice.supported && voice.micOn && (
+            <p className="voice-hint chat-widget__voice">
+              Đang nghe liên tục… im lặng 2 giây sẽ gửi. Nói &quot;tắt mic&quot; hoặc &quot;kết thúc cuộc trò chuyện&quot; để tắt.
+            </p>
           )}
         </div>
       ) : (

@@ -178,18 +178,32 @@ func NormalizeToolArgs(args map[string]any) map[string]any {
 	productRaw := strVal(out["product"])
 	providerRaw := strVal(out["provider"])
 	product, provider := ResolveProductPair(productRaw, providerRaw)
+	if product == "" && providerRaw != "" {
+		if code := ResolveProduct(providerRaw); code != "" {
+			product = code
+			provider = ""
+		}
+	}
 	if product != "" {
 		out["product"] = product
 	}
 	if provider != "" {
-		out["provider"] = provider
+		if _, ok := knownRoutingProviders[provider]; ok {
+			out["provider"] = provider
+		} else if product != "" {
+			delete(out, "provider")
+		}
 	} else if providerRaw != "" && product != "" {
 		delete(out, "provider")
 	}
 	if sku := strVal(out["sku"]); sku != "" {
-		out["sku"] = strings.ToUpper(strings.TrimSpace(sku))
+		out["sku"] = NormalizeSKU(sku)
 	}
 	return out
+}
+
+var knownRoutingProviders = map[string]struct{}{
+	"ESALE": {}, "IMEDIA": {}, "SHOPPAY": {},
 }
 
 var knownProductCodes = map[string]struct{}{
@@ -214,6 +228,7 @@ func CatalogHint(products []domain.Product) string {
 	b.WriteString("Provider routing (không phải nhà mạng): ESALE, IMEDIA, SHOPPAY.\n")
 	b.WriteString("Khi user nói \"topup mobi\" → product TOPUP_MOBI; \"thẻ zing\" → ZING; \"data vina\" → DATA_VINA.\n")
 	b.WriteString("Câu hỏi tổng quan topup/data (không nêu provider) → gọi get_routing(product) hoặc get_metrics lần lượt ESALE/IMEDIA/SHOPPAY.\n")
+	b.WriteString("Hỏi bảo trì dịch vụ (vd thẻ garena có BT không) → get_maintenance(product) một lần, không cần provider.\n")
 	return b.String()
 }
 

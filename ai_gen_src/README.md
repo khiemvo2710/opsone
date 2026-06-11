@@ -35,7 +35,10 @@ Monorepo Go + MySQL cho **OpsOne** — spec: `../OpsOne.md`
 - `POST .../maintenance/extend` — **400** `no_change` khi gia hạn không đổi thời gian (`CountActiveMaintenanceForSKU`)
 - Endpoints: health-status, config, incidents (phân trang), scopes auto/routing/maintenance, maintenance, **`POST /chat` LLM agent §7.6.5** (stub keyword khi không có `LLM_API_KEY`), `/events`
 - **`internal/llm`** — OpenAI-compatible client (GreenNode AIP); **`internal/api/chat_agent.go`** — tool calling + session memory
-- **`internal/chatresolve`** — alias dịch vụ chat (`topup mobi` → `TOPUP_MOBI`; provider chỉ ESALE/IMEDIA/SHOPPAY)
+- **`internal/api/chat_maintenance.go`** — `maintenanceForChat` + `tryChatMaintenanceReply` (§7.6.5.1): cùng query/lọc như Dashboard; **không** fall-through LLM
+- **`internal/chatresolve`** — alias (`aliases.go`), intent BT (`intent.go`), SKU `10.000`→`10000` (`sku.go`)
+- **`internal/tools/maintenance_format.go`** — `FormatMaintenanceReply`, `EnrichMaintenanceOutput`
+- **`internal/tools/maintenance_build.go`** — `MaintenanceInWindow`, `BuildMaintenanceOutput`, `FilterMaintenanceByProvider`
 - Integration test: `$env:OPSONE_INTEGRATION=1; go test ./internal/api/... -v` — gồm `TestProductScopeAutoPutOverview`, `TestConfigPutMaintenanceDefaultDuration`
 
 ### Phase 6 — Frontend React ✅
@@ -52,8 +55,8 @@ Monorepo Go + MySQL cho **OpsOne** — spec: `../OpsOne.md`
 - **Mở lại dịch vụ** — `POST .../maintenance/reopen-service` (atomic baseline + grace)
 - **`Layout`** — logo ZaloPay header + favicon tab (`web/public/favicon.png`)
 - Chat widget — panel ~800×780px; nhãn **Bạn/OpsOne**; kéo dock 4 góc (`useChatDock`); resize 4 góc (`useChatResize`); auto-focus ô nhập khi mở
-- Voice `vi-VN` (`useVoiceInput`) — im lặng **2s** → tự gửi chat; xóa ô nhập sau gửi
-- LLM + alias dịch vụ §7.6.5; Admin duyệt qua chat khi yêu cầu rõ
+- Voice `vi-VN` (`useVoiceInput`) — Mic toggle liên tục; im lặng **2s** → gửi; restart STT sau gửi (clear transcript); watchdog chống đơ; lệnh thoại *tắt mic* / *kết thúc cuộc trò chuyện*
+- Chat bảo trì §7.6.5.1 — *thẻ Garena*, *Mobifone 10.000*, follow-up session; LLM + alias §7.6.5; Admin duyệt khi yêu cầu rõ
 - SSE `/events` + poll 60s fallback
 - Dev: `VITE_DEV_AUTH_BYPASS=true` (header `X-OpsOne-Role`); production: MSAL.js §2.6.4
 
@@ -104,7 +107,7 @@ $env:OPSONE_INTEGRATION="1"; go test ./... -v
 
 **LLM chat:** `LLM_API_KEY` + `LLM_MODEL=minimax/minimax-m2.5` trong `.env`. API tự đọc `.env` khi chạy từ `ai_gen_src/`; khuyến nghị `.\scripts\run-api.ps1`.
 
-**Alias chat (`internal/chatresolve`):** trước tool call, `NormalizeToolArgs` map viết tắt → `product_code`. Ví dụ: `topup mobi` → `TOPUP_MOBI`; `thẻ zing` → `ZING`; `data vina` → `DATA_VINA`. Provider routing: `ESALE`, `IMEDIA`, `SHOPPAY` (mobi/vina/viettel **không** phải provider). Bảng đầy đủ: [`OpsOne.md` §7.6.5](../OpsOne.md).
+**Chat alias & bảo trì:** `NormalizeToolArgs` + `NormalizeSKU`. Câu hỏi BT → `maintenanceForChat` (giống Dashboard `ListMaintenanceWindows` + `MaintenanceInWindow` trong Go). Deploy API sau đổi chat BT. Provider routing: `ESALE`, `IMEDIA`, `SHOPPAY`. Chi tiết: [`OpsOne.md` §7.6.5 / §7.6.5.1](../OpsOne.md).
 
 ### Chạy workers + API
 
@@ -143,6 +146,9 @@ Chi tiết §15.2.2 trong `OpsOne.md` (MYSQL_DSN, không `allowPublicKeyRetrieva
 ai_gen_src/
 ├── cmd/api, worker-mock, worker-agent
 ├── internal/agent, api, chatresolve, llm, store, tools, …
+│   ├── api/chat_maintenance.go       # maintenanceForChat — khớp Dashboard
+│   ├── chatresolve/intent.go, sku.go
+│   └── tools/maintenance_format.go, maintenance_build.go
 ├── db/schema.sql, seed.sql
 ├── Dockerfile, Dockerfile.worker-*
 ├── scripts/run-api.ps1, dev.ps1, deploy-greennode*.ps1
@@ -153,4 +159,4 @@ ai_gen_src/
     └── pages/        # Dashboard, IncidentsPage, Settings, …
 ```
 
-Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §7.6.5 Chat LLM, §9 Chat/Voice, §9.0 Dashboard, §15.2.2 GreenNode deploy, §9.5 Cấu hình, §9.5.2 Chế độ BT / Routing.
+Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §7.6.5 Chat LLM, **§7.6.5.1 Tra cứu BT**, §9 Chat/Voice, §9.0 Dashboard, §15.2.2 GreenNode deploy, §9.5 Cấu hình, §9.5.2 Chế độ BT / Routing.

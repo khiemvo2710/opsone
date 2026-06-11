@@ -345,9 +345,9 @@ Load product_alert_thresholds
 ```text
 User mở UI (PC / mobile)
     ↓
-Chat text  hoặc  Nhấn micro → nói lệnh → im lặng 2s
+Chat text  hoặc  Bật Mic (toggle) → nói lệnh → im lặng 2s → tự gửi → mic vẫn bật (hội thoại liên tục)
               ↓
-Speech-to-text (nếu voice) → cùng endpoint Agent chat (`POST /chat`)
+Speech-to-text (nếu voice) → cùng endpoint Agent chat (`POST /chat`) — tắt Mic: bấm Mic hoặc nói *tắt mic* / *kết thúc cuộc trò chuyện*
     ↓
 Agent trả lời / gọi tool on-demand (VD: giải thích incident, xem routing)
     ↓
@@ -479,8 +479,8 @@ opsone/
 │   ├── threshold/           # Đánh giá ngưỡng per product §1.2 / §7.5
 │   ├── reasoning/           # LLM client + prompt builder
 │   ├── health/              # health_status green/yellow/red §8.2
-│   ├── api/                 # REST + SSE §2.3; chat agent §7.6.5 — chat_agent.go, chat_actions.go, …
-│   ├── chatresolve/         # Alias dịch vụ/provider cho chat §7.6.5 (`topup mobi` → TOPUP_MOBI)
+│   ├── api/                 # REST + SSE §2.3; chat agent §7.6.5 — chat_agent.go, chat_maintenance.go, …
+│   ├── chatresolve/         # Alias + intent BT/SKU §7.6.5 (`intent.go`, `sku.go`, `aliases.go`)
 │   ├── healthserver/        # GET /health :8080 — probe AgentBase trước khi nối MySQL (api/workers)
 │   └── llm/                 # OpenAI-compatible MaaS client §7.6.7 (GreenNode AIP)
 ├── Dockerfile               # api — GreenNode AgentBase
@@ -538,7 +538,7 @@ opsone/
 │   │       ├── useSSE.ts               # /events + poll fallback
 │   │       ├── useOverallHealth.ts     # header/logo badge 🟢🟡🔴
 │   │       ├── useProductThresholds.ts # cache GET /products/{code}/thresholds
-│   │       └── useVoiceInput.ts        # Web Speech vi-VN; im lặng 2s → tự gửi chat
+│   │       └── useVoiceInput.ts        # Web Speech vi-VN; mic liên tục; 2s silence → gửi; watchdog; lệnh tắt mic
 │   └── package.json
 ├── docker-compose.yml       # mysql (+ TZ Asia/Ho_Chi_Minh)
 └── Makefile                 # migrate, seed, run-all
@@ -2016,7 +2016,7 @@ Ngoài khung giờ (mode `time_window`, VD `now` trước `window_start` hoặc 
 { "product": "ZING", "provider": "ESALE", "sku": "" }
 ```
 
-**Output:** xem §8.5. Query `maintenance_windows` WHERE `status IN ('scheduled','active')` AND `ends_at > NOW()`.
+**Output:** xem §8.5. Query `maintenance_windows` WHERE `status IN ('scheduled','active')` (theo `product`/`provider`/`sku`); **phân loại active/scheduled trong Go** bằng `MaintenanceInWindow` — **không** lọc `ends_at > NOW()` trong SQL (tránh lệch TZ với Dashboard §9.0).
 
 **Checklist:**
 
@@ -2545,12 +2545,13 @@ OUTPUT (plain text — KHÔNG markdown):
 
 #### 7.6.5 Chat Agent — On-demand chat/voice (§9) ✅ triển khai
 
-**Code:** `internal/api/chat_agent.go`, `internal/api/chat_actions.go`, `internal/chatresolve/aliases.go`, `internal/llm/client.go` — `POST /api/v1/chat` `{ "message", "session_id?" }`.
+**Code:** `internal/api/chat_agent.go`, `internal/api/chat_maintenance.go`, `internal/api/chat_actions.go`, `internal/chatresolve/` (`aliases.go`, `intent.go`, `sku.go`), `internal/tools/maintenance_format.go`, `internal/tools/maintenance_build.go`, `internal/llm/client.go` — `POST /api/v1/chat` `{ "message", "session_id?" }`.
 
 | Trạng thái | Hành vi |
 |------------|---------|
+| **Câu hỏi bảo trì** (§7.6.5.1) | **Luôn** tra DB trực tiếp (`tryChatMaintenanceReply`) — **không** chuyển sang LLM; dữ liệu = `GET /dashboard/overview` |
 | `LLM_API_KEY` **có** | Agent loop OpenAI-compatible (GreenNode AIP), tool calling tối đa **6 vòng**; session in-memory tối đa **40** message/`session_id` |
-| `LLM_API_KEY` **trống** | Fallback keyword stub (`handlers.go` — health/incident cơ bản) |
+| `LLM_API_KEY` **trống** | Fallback keyword stub (`handlers.go` — health/incident/**bảo trì** cơ bản) |
 
 **System prompt** (`chatSystemPrompt`): tiếng Việt; admin vs non-admin; **danh mục product** load từ DB + gợi ý viết tắt; quy tắc mobi/vina/viettel là **dịch vụ** không phải provider.
 
@@ -2577,9 +2578,46 @@ OUTPUT (plain text — KHÔNG markdown):
 | `get_metrics` | success/pending/fail + GD; `product` viết tắt OK; `provider` tuỳ chọn (bỏ trống = cả 3) |
 | `get_top_errors` | mã lỗi top |
 | `get_routing` | tỉ lệ routing product (chỉ cần product — phù hợp câu hỏi tổng quan topup) |
-| `get_maintenance` | cửa sổ BT active/scheduled |
+| `get_maintenance` | cửa sổ BT active/scheduled — **chỉ cần `product`**; `provider`/`sku` tuỳ chọn; trả `summary_vi`, `by_sku`, `active_count` |
 | `get_incidents` | sự cố gần đây |
 | `list_pending_actions` | routing plan + đề xuất bảo trì chờ duyệt |
+
+##### 7.6.5.1 Tra cứu bảo trì — direct reply (khớp Dashboard)
+
+**Vấn đề đã xử lý:** LLM tự kết luận sai (vd *"provider ESALE không có bảo trì"* trong khi Dashboard hiện BT); gọi tool với `provider`/`sku` sai (`10.000` ≠ `10000`); follow-up không có từ *bảo trì*; lệch múi giờ khi SQL dùng `ends_at > NOW()` thay vì lọc `time.Now()` như overview.
+
+**Luồng (`chat_maintenance.go` → `tryChatMaintenanceReply`):**
+
+1. `chatresolve.ShouldLookupMaintenance(userMsg, sessionHistory)` — true khi:
+   - Có token bảo trì (`bảo trì`, `có bảo trì`, `đang bảo trì`, `đang bt`, `maintenance`, …), **hoặc**
+   - Có **thẻ + mệnh giá** (`IsMaintenanceScopeQuery`: *thẻ Mobifone 10.000*), **hoặc**
+   - **Follow-up** sau câu hỏi bảo trì trong cùng `session_id`.
+2. `ExtractProductFromText` / `ExtractSKUFromText` + `NormalizeSKU` (`10.000` → `10000`); fallback lịch sử session.
+3. **`maintenanceForChat(product, sku?)`** — **cùng nguồn Dashboard:**
+   - `ListMaintenanceWindows(product, status='active', limit=500)`;
+   - Lọc in-window trong Go: `!ends.Before(now) && !starts.After(now)` (`MaintenanceInWindow` — §9.0);
+   - Tuỳ chọn lọc `sku_code`; thêm `scheduled` tương lai.
+4. **`FormatMaintenanceReply`** — trả lời tiếng Việt theo SKU/provider.
+5. **Không fall-through LLM** — kể cả lỗi DB hoặc không nhận product → trả message trực tiếp (stub tiếng Việt).
+
+**Tool `get_maintenance` (LLM):** cũng gọi `maintenanceForChat` + `EnrichMaintenanceOutput`; `provider` routing tuỳ chọn qua `FilterMaintenanceByProvider`.
+
+**`NormalizeToolArgs`:** `provider` nhầm tên dịch vụ → `product`; `sku` qua `NormalizeSKU`. Provider routing chỉ `ESALE`/`IMEDIA`/`SHOPPAY`.
+
+**Nhận biết deploy đúng:** câu trả lời dạng `**GARENA** — có **N** mệnh giá đang bảo trì:` — **không** có câu LLM kiểu *"(provider ESALE) không có bảo trì"*.
+
+**Ví dụ bảo trì:**
+
+```text
+USER: "thẻ Garena có đang bảo trì không"
+→ GARENA → liệt kê 10000, 20000, 50000, 100000 (khớp nhãn BT dưới SKU trên Dashboard).
+
+USER: "Thẻ Mobifone 10.000 có bảo trì không?"
+→ MOBIFONE / sku=10000.
+
+USER (follow-up): "Ý tôi nói là thẻ Mobifone 10.000"
+→ session follow-up → MOBIFONE / 10000.
+```
 
 **Tool duyệt** — chỉ khi request có role **Admin** (`X-OpsOne-Role: admin` dev / JWT prod) **và** user **yêu cầu rõ** duyệt/từ chối:
 
@@ -3723,7 +3761,7 @@ Khi nhóm SKU cùng `product_code` (`routing_mode=sku`, ≥2 dòng SKU) — ô *
 
 **Navigation (`Layout.tsx`):** Menu **tab ngang trên header** — Dashboard · Sự cố · Bảo trì · Cấu hình (không còn sidebar trái). **Logo ZaloPay** (32×32) cạnh chữ **OpsOne**; badge 🟢🟡🔴 global cạnh brand. **Favicon** tab trình duyệt: `web/public/favicon.png` (logo ZaloPay).
 
-**Chat (`ChatWidget.tsx` + `useChatDock.ts`):** Widget nổi panel **~800×780px** (mobile ~full width / 88vh); nhãn bubble **Bạn / OpsOne**; phản hồi AI full-width, `pre-wrap`; **một vùng scroll** trên feed (không scrollbar lồng trong bubble). **Kéo** nút Chat hoặc header để **dock** 4 góc; vị trí `localStorage` (`opsone-chat-corner`). **Enter** gửi, **Shift+Enter** xuống dòng; **sau gửi xóa ô nhập**. Voice `vi-VN` qua `useVoiceInput`: **im lặng 2 giây** sau lời nói cuối → tự gửi (không cần từ kết thúc); khi đang nghe hiện gợi ý *Đang nghe… ngừng nói 2 giây sẽ tự gửi.* Không route `/chat` riêng.
+**Chat (`ChatWidget.tsx` + `useChatDock.ts` + `useVoiceInput`):** Widget nổi panel **~800×780px** (mobile ~full width / 88vh); nhãn bubble **Bạn / OpsOne**; phản hồi AI full-width, `pre-wrap`; **một vùng scroll** trên feed (không scrollbar lồng trong bubble). **Kéo** nút Chat hoặc header để **dock** 4 góc; resize 4 góc (`useChatResize`); vị trí `localStorage` (`opsone-chat-corner`). **Enter** gửi, **Shift+Enter** xuống dòng; **sau gửi xóa ô nhập** (voice: restart session STT sau mỗi lần auto-gửi — tránh dính transcript cũ). **Voice** `vi-VN`: nút **Mic** = **toggle** — bật **Mic ●** hội thoại liên tục; **im lặng 2 giây** (`VOICE_SILENCE_MS`) → tự gửi; **mic không tự tắt** sau gửi; **watchdog** 5s khởi động lại STT nếu đơ >12s; nói *tắt mic* / *kết thúc cuộc trò chuyện* (và biến thể) → tắt mic, không gửi chat. Gợi ý khi mic bật: *Đang nghe liên tục… im lặng 2 giây sẽ gửi. Nói "tắt mic" hoặc "kết thúc cuộc trò chuyện" để tắt.* Không route `/chat` riêng.
 
 UI là **mặt tiếp xúc với người vận hành** — dùng được trên **điện thoại** và **PC**, nhận lệnh qua **chat** hoặc **micro**.
 
@@ -3737,7 +3775,7 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
 | **Bảng tổng quan**     | Routing hiện tại mọi product/SKU + bảo trì + 1 plan chờ/scope — refresh 60s + SSE   |
 | **Feed sự cố**         | Trang `/incidents` — bảng phân trang full-width (không drill-down)                  |
 | **Chat**               | User gõ câu hỏi hoặc lệnh → Agent trả lời (on-demand)                                |
-| **Voice**              | User nhấn micro, nói lệnh → STT → cùng luồng xử lý như chat                          |
+| **Voice**              | Toggle Mic → STT liên tục; im lặng 2s → tự gửi; tắt Mic: bấm lại hoặc lệnh thoại §9.2   |
 | **Hành động**          | Approve / từ chối Routing Plan + đề xuất bảo trì (khi scope `recommend_only` hoặc `time_window` ngoài giờ); **Mở lại provider** / **Mở lại dịch vụ** |
 | **Thông báo email**    | Xem mail đã gửi; cấu hình nhóm chat provider (§8.9, §9.5.5)                          |
 
@@ -3755,19 +3793,25 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
               "Mở lại routing TOPUP_VINA về baseline"
 ```
 
-**Voice (micro):**
+**Voice (micro) — hội thoại liên tục:**
 
 ```text
-[Nút micro]  →  Thu âm (continuous)  →  Speech-to-Text vi-VN  →  Im lặng 2s  →  Tự gửi /chat
+[Bấm Mic]  →  Bật session (Mic ●)  →  STT vi-VN continuous
               "Cho tôi biết ESALE ZING hôm nay thế nào"
-              (ngừng nói 2 giây → gửi, không cần bấm Gửi)
+              (im lặng 2 giây → tự gửi /chat, xóa ô nhập, mic VẪN bật)
+              "Còn incident nào đang mở?"
+              (im lặng 2 giây → gửi câu tiếp…)
+[Bấm Mic lần nữa]  hoặc  nói "tắt mic" / "kết thúc cuộc trò chuyện"  →  Tắt session
 ```
 
-**Yêu cầu voice:**
+**Yêu cầu voice (`useVoiceInput.ts`):**
 
-- Nút micro rõ ràng (trạng thái: idle / đang nghe / đang xử lý).
+- Nút **Mic** = **toggle**: `micOn` — idle (`Mic`) / đang nghe (`Mic ●`); tắt session: bấm Mic lại **hoặc** lệnh thoại (`VOICE_MIC_OFF_PHRASES`).
 - Hiển thị **bản ghi nhận dạng giọng** trong ô nhập khi đang nghe; user sửa được nếu STT sai trước khi im lặng đủ 2s.
-- **Tự gửi:** `VOICE_SILENCE_MS = 2000` — reset timer mỗi lần STT cập nhật; hết 2s không có lời mới → gọi cùng luồng `POST /chat` như nút Gửi; xóa ô nhập sau gửi.
+- **Tự gửi từng câu:** `VOICE_SILENCE_MS = 2000` — reset timer mỗi lần STT cập nhật; hết 2s → `POST /chat`; **xóa ô nhập**; **khởi động lại session STT** (~80ms) sau gửi để Chrome không ghép transcript câu trước.
+- **Session liên tục:** `micSessionRef` giữ true; `onend`/`onerror` → `spawnRecognition()` với **epoch** (bỏ event cũ), `abort()` session trước; **watchdog** 5s — nếu >12s không `onresult` → restart.
+- Chặn `onresult` cũ sau gửi (`ignoreResultsUntil` ~800ms).
+- **Lệnh tắt mic (không gửi chat):** `tắt mic`, `tắt micro`, `dừng mic`, `ngừng nghe`, `kết thúc cuộc trò chuyện`, `kết thúc hội thoại`, `kết thúc chat`, … (`matchesMicOffPhrase` — có/không dấu).
 - Fallback: trình duyệt không hỗ trợ STT → ẩn micro, chỉ dùng chat.
 - Ngôn ngữ: **tiếng Việt bắt buộc** (§2.5); STT Web Speech API `vi-VN`.
 
@@ -4277,7 +4321,7 @@ Schema mở rộng (chưa expose hết trên UI):
 - [x] Cột **Chế độ BT / Routing** — `ScopeAutoEditor` per SKU + cột Dịch vụ (sku-mode); compact + ⋯ (Chỉ đề xuất / Tự động / Tự động theo khung giờ); overview tách `product_auto_action` / `scope_auto_action` / `auto_action` hiệu lực §9.5.2; Lưu riêng (không dùng Lưu hàng Ngưỡng).
 - [x] Bảng metric — scroll ngang nhẹ khi cần; `table-layout: fixed`, truncate + tooltip.
 - [x] `GET /incidents?page=&page_size=` — phân trang full-width; **không** route `/incidents/:id` trên UI.
-- [x] `ChatWidget` + `useChatDock` + `useVoiceInput`; panel lớn (~800px); alias chat §7.6.5 (`chatresolve`)
+- [x] `ChatWidget` + `useChatDock` + `useVoiceInput`; panel lớn (~800px); voice watchdog + lệnh tắt mic; alias + tra BT direct §7.6.5 (`chatresolve`, `chat_maintenance`)
 - [x] `/settings` — card compact §9.5: scheduler + **thời lượng BT mặc định** (§9.5.5) + mock (`normalizeConfig` fallback 60); select kịch bản **full-width**.
 - [x] Dev: `web/dev.ps1`, `VITE_DEV_AUTH_BYPASS`, proxy Vite → API.
 - [ ] MSAL O365 production (`VITE_AAD_*`); §2.6 JWT middleware đầy đủ.
@@ -4393,8 +4437,8 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 **Tình huống:** Ops đang di chuyển, mở UI trên **điện thoại** sau khi scheduler sinh Incident #20260604-001 (ZING SKU 20k).
 
 1. UI feed hiển thị card Sự cố mức Cao — tap mở chi tiết.
-2. **Chat:** gõ *"Tình hình topup mobi?"* → alias `TOPUP_MOBI` §7.6.5 → `get_routing` + `get_metrics` (cả 3 provider) → tóm tắt tiếng Việt. Hoặc *"Tại sao ESALE 20k fail tăng?"* → `get_metrics` + `get_top_errors`.
-3. **Voice:** nhấn micro, nói *"Đề xuất routing cho mệnh giá hai mươi nghìn"* → STT → im lặng 2s → tự gửi `/chat` → Agent trả Routing Plan.
+2. **Chat:** gõ *"Tình hình topup mobi?"* → alias `TOPUP_MOBI` §7.6.5 → `get_routing` + `get_metrics` (cả 3 provider) → tóm tắt tiếng Việt. Hoặc *"Tại sao ESALE 20k fail tăng?"* → `get_metrics` + `get_top_errors`. **Bảo trì:** *"Thẻ Garena có đang bảo trì?"* hoặc *"Thẻ Mobifone 10.000"* (follow-up) → direct reply §7.6.5.1 khớp nhãn BT Dashboard.
+3. **Voice:** bật Mic, nói *"Đề xuất routing cho mệnh giá hai mươi nghìn"* → im lặng 2s → tự gửi `/chat` (mic vẫn bật, ô nhập clear) → Agent trả Routing Plan; hỏi tiếp không cần bật Mic lại; nói *"tắt mic"* hoặc bấm Mic để tắt.
 4. Trên **desktop** cùng tài khoản: Dashboard §9.0 — bảng routing (hàng con *Kế hoạch routing* dưới SKU) + bảng incidents + `ChatWidget` góc phải dưới (cùng dữ liệu).
 5. (Tuỳ chọn) Ops bấm **Duyệt** trên hàng kế hoạch (cột Bảo trì, căn phải) → UpdateRouting thực thi.
 6. (Tuỳ chọn, **Admin**) Chat: *"Liệt kê việc chờ duyệt"* → *"Duyệt routing TOPUP_VINA"* — agent gọi `list_pending_actions` + tool duyệt §7.6.5 (cần `LLM_API_KEY` + role Admin).
@@ -5118,18 +5162,21 @@ CREATE TABLE maintenance_windows (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
-**Query GetMaintenance — cửa sổ đang/sắp hiệu lực:**
+**Query GetMaintenance / ListActiveMaintenance — cửa sổ theo scope:**
 
 ```sql
-SELECT maintenance_id, starts_at, ends_at, status, reason
+SELECT maintenance_id, product_code, provider_code, sku_code, starts_at, ends_at, status, reason
 FROM maintenance_windows
 WHERE product_code = ?
-  AND provider_code = ?
-  AND sku_code = ?
+  /* AND provider_code = ?  -- optional */
+  /* AND sku_code = ?       -- optional */
   AND status IN ('scheduled', 'active')
-  AND ends_at > NOW()
-ORDER BY starts_at ASC;
+ORDER BY sku_code ASC, provider_code ASC, starts_at ASC;
 ```
+
+**Lọc in-window (Go — giống `GET /dashboard/overview`):** `!ends_at.Before(now) && !starts_at.After(now)` → **active**; `starts_at.After(now)` → **scheduled**; hết hạn → bỏ qua.
+
+**Chat §7.6.5.1:** `maintenanceForChat` dùng `ListMaintenanceWindows(product, 'active')` + cùng bộ lọc Go như overview (không dùng `ends_at > NOW()` trong SQL).
 
 **Query tick lifecycle (worker mỗi phút):**
 
@@ -5757,7 +5804,7 @@ export const TOOLS_OPENAI = [
 ];
 ```
 
-**Lưu ý cho chat agent (§7.6.5):** Tool tra cứu + `list_pending_actions`; args qua `chatresolve.NormalizeToolArgs`. Admin thêm 6 tool duyệt/từ chối — **không** expose trực tiếp `UpdateRouting` / `SetMaintenance`.
+**Lưu ý cho chat agent (§7.6.5):** Câu hỏi bảo trì → `tryChatMaintenanceReply` / `maintenanceForChat` (§7.6.5.1) **trước và thay** LLM. `get_maintenance` tool dùng cùng `maintenanceForChat`. Args qua `chatresolve.NormalizeToolArgs` (`NormalizeSKU`). Admin thêm 6 tool duyệt/từ chối — **không** expose trực tiếp `UpdateRouting` / `SetMaintenance`.
 
 ### 14.6 Checklist Tool Contracts
 
