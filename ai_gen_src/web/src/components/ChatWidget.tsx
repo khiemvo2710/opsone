@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, ApiClientError } from '../api/client';
+import { api, ApiClientError, eventsUrl } from '../api/client';
 import { useVoiceInput, primeSpeechRecognition, VOICE_WAKE_WORD } from '../hooks/useVoiceInput';
 import { useOpsOneWake } from '../hooks/useOpsOneWake';
 import { useChatDock } from '../hooks/useChatDock';
@@ -13,7 +13,6 @@ import {
   buildOnboardingReply,
   buildProfileUpdateReply,
   isLikelyOpsQuery,
-  isSkipOnboarding,
   mergeProfileFromUserTexts,
   onboardingFinished,
   shouldHandleAsProfileUpdate,
@@ -28,6 +27,77 @@ interface ChatMessage {
 
 function appendMessage(role: ChatMessage['role'], text: string): ChatMessage {
   return { role, text, at: Date.now() };
+}
+
+// Format pending suggestions from SSE event into a user-friendly system message
+function formatSuggestionSystemMessage(data: Record<string, unknown>): string {
+  const hasSuggestions = !!data.has_suggestions;
+  if (!hasSuggestions) return '';
+
+  const lines: string[] = [];
+  lines.push('📢 **Có việc mới cần xử lý!**\n');
+
+  // Add routing plans
+  const plans = Array.isArray(data.routing_plans) ? data.routing_plans : [];
+  if (plans.length > 0) {
+    lines.push('🔄 **Đề xuất Routing:** (Thay đổi phân phối traffic)');
+    for (let i = 0; i < Math.min(plans.length, 3); i += 1) {
+      const plan = plans[i] as Record<string, unknown>;
+      const productCode = String(plan.product_code || '');
+      const skuCode = String(plan.sku_code || '');
+      const reasonVI = String(plan.reason_vi || '');
+      const proposed = plan.proposed_pct as Record<string, number> | undefined;
+
+      let pctStr = '';
+      if (proposed && typeof proposed === 'object') {
+        const parts: string[] = [];
+        Object.entries(proposed).forEach(([provider, pct]) => {
+          parts.push(`${provider}: ${Math.round(pct)}%`);
+        });
+        if (parts.length > 0) {
+          pctStr = ` → ${parts.join(' / ')}`;
+        }
+      }
+
+      let detail = `${productCode}/${skuCode}${pctStr}`;
+      if (reasonVI) {
+        detail += ` (${reasonVI})`;
+      }
+      lines.push(`   • ${detail}`);
+    }
+    if (plans.length > 3) {
+      lines.push(`   • ...và ${plans.length - 3} kế hoạch khác`);
+    }
+    lines.push('');
+  }
+
+  // Add maintenance suggestions
+  const maintenance = Array.isArray(data.maintenance_suggestions) ? data.maintenance_suggestions : [];
+  if (maintenance.length > 0) {
+    lines.push('🔧 **Đề xuất Bảo trì:**');
+    for (let i = 0; i < Math.min(maintenance.length, 3); i += 1) {
+      const maint = maintenance[i] as Record<string, unknown>;
+      const productCode = String(maint.product_code || '');
+      const skuCode = String(maint.sku_code || '');
+      const detail = String(maint.detail || '');
+
+      let detailStr = `${productCode}/${skuCode}`;
+      if (detail) {
+        detailStr += ` — ${detail}`;
+      }
+      lines.push(`   • ${detailStr}`);
+    }
+    if (maintenance.length > 3) {
+      lines.push(`   • ...và ${maintenance.length - 3} bảo trì khác`);
+    }
+    lines.push('');
+  }
+
+  lines.push('💡 **Hành động:**');
+  lines.push('   • Gõ "xem pending" để xem chi tiết');
+  lines.push('   • Admin: duyệt/từ chối ngay hoặc vào Dashboard');
+
+  return lines.join('\n');
 }
 
 function ChatBubbleRow({
@@ -82,6 +152,7 @@ export function ChatWidget() {
   const onboardingCompleteRef = useRef(false);
   const userProfileRef = useRef<ChatUserProfile>({});
   const introShownRef = useRef(false);
+  const initialLoadRef = useRef(true); // Track if this is initial page load
   const feedRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const widgetRef = useRef<HTMLDivElement>(null);
@@ -117,8 +188,41 @@ export function ChatWidget() {
       }),
     onSuccess: (data) => {
       setMessages((prev) => [...prev, appendMessage('assistant', data.reply)]);
+      // Invalidate queries to trigger automatic refetch from server
       void queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
       void queryClient.invalidateQueries({ queryKey: ['maintenance'] });
+      void queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      void queryClient.invalidateQueries({ queryKey: ['routing-plans'] });
+      void queryClient.invalidateQueries({ queryKey: ['health-status'] });
+
+      // After maintenance/routing action, refetch queries to get updated data
+      // without reloading the page (preserves chat history)
+      const shouldRefetch = [
+        'Đã bật bảo trì',           // Set maintenance
+        'Đã gia hạn',               // Extend maintenance
+        'Đã từ chối',               // Reject maintenance/routing
+        'Đã duyệt',                 // Approve maintenance/routing
+        'Đã mở lại',                // Reopen service
+        'Đã trả',                   // Restore baseline (Đã trả routing baseline)
+        'Đã cập nhật',              // Set scope auto
+        'Đã gia hạn bảo trì',       // Extended maintenance (full phrase)
+        'Đã duyệt bảo trì',         // Approved maintenance (full phrase)
+        'Đã duyệt kế hoạch routing', // Approved routing plan
+      ].some((keyword) => data.reply.includes(keyword));
+
+      if (shouldRefetch) {
+        // Refetch queries after 1.2 seconds to show confirmation message first,
+        // then silently refresh data in background without page reload
+        window.setTimeout(async () => {
+          await Promise.all([
+            queryClient.refetchQueries({ queryKey: ['dashboard-overview'] }),
+            queryClient.refetchQueries({ queryKey: ['maintenance'] }),
+            queryClient.refetchQueries({ queryKey: ['incidents'] }),
+            queryClient.refetchQueries({ queryKey: ['routing-plans'] }),
+            queryClient.refetchQueries({ queryKey: ['health-status'] }),
+          ]);
+        }, 1200);
+      }
     },
     onError: (err: Error) => {
       const text = err instanceof ApiClientError ? err.message : 'Chat thất bại — thử lại.';
@@ -200,12 +304,17 @@ export function ChatWidget() {
         callBackend = true;
       }
     } else {
-      localAssistantReply = appendMessage('assistant', buildOnboardingReply(nextProfile, trimmed));
-      if (onboardingFinished(nextProfile, trimmed)) {
+      // Onboarding not complete yet
+      if (isLikelyOpsQuery(trimmed)) {
+        // User sends ops query before completing onboarding → process directly
+        callBackend = true;
+      } else if (onboardingFinished(nextProfile, trimmed)) {
+        // User provided name/profile info or skipped onboarding → complete onboarding
         onboardingCompleteRef.current = true;
-        if (isLikelyOpsQuery(trimmed) && !isSkipOnboarding(trimmed)) {
-          callBackend = true;
-        }
+        localAssistantReply = appendMessage('assistant', buildOnboardingReply(nextProfile, trimmed));
+      } else {
+        // User didn't provide name and didn't send ops query → ask for name
+        localAssistantReply = appendMessage('assistant', buildOnboardingReply(nextProfile, trimmed));
       }
     }
 
@@ -302,6 +411,62 @@ export function ChatWidget() {
     onWake: handleAloWake,
   });
 
+  // Listen for pending_suggestions SSE event and auto-open chat
+  useEffect(() => {
+    // Mark initial load as complete after component mounts
+    const markInitialLoadDone = setTimeout(() => {
+      initialLoadRef.current = false;
+    }, 500);
+
+    let es: EventSource | null = null;
+
+    try {
+      const setupListener = () => {
+        es = new EventSource(eventsUrl());
+        es.addEventListener('pending_suggestions', (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.has_suggestions && !initialLoadRef.current) {
+              // Only auto-open chat if NOT initial page load
+              setOpen(true);
+
+              // Build system message
+              const message = formatSuggestionSystemMessage(data);
+              if (message) {
+                // Add system message to chat
+                setMessages((prev) => {
+                  // Check if we already have this message
+                  const lastMsg = prev[prev.length - 1];
+                  if (lastMsg && lastMsg.role === 'assistant' && lastMsg.text.includes('📢')) {
+                    return prev;
+                  }
+                  return [...prev, appendMessage('assistant', message)];
+                });
+                // Scroll to bottom
+                requestAnimationFrame(() => scrollFeedToBottom());
+              }
+            }
+          } catch {
+            // Silently ignore parse errors
+          }
+        });
+        es.onerror = () => {
+          es?.close();
+          es = null;
+        };
+      };
+
+      setupListener();
+    } catch {
+      // Silently ignore if EventSource is not available
+    }
+
+    return () => {
+      clearTimeout(markInitialLoadDone);
+      es?.close();
+    };
+  }, [scrollFeedToBottom]);
+
   useEffect(() => {
     if (!voice.supported || speechPrimed) return;
 
@@ -326,6 +491,24 @@ export function ChatWidget() {
     if (!voice.supported || speechPrimed) return;
     void ensureSpeechPrimed();
   }, [voice.supported, speechPrimed, ensureSpeechPrimed]);
+
+  // Auto-refetch dashboard data every 1 minute (60 seconds) to keep UI up-to-date
+  // This simulates automatic polling without reloading the page or losing chat history
+  useEffect(() => {
+    const refetchInterval = setInterval(() => {
+      void Promise.all([
+        queryClient.refetchQueries({ queryKey: ['dashboard-overview'] }),
+        queryClient.refetchQueries({ queryKey: ['maintenance'] }),
+        queryClient.refetchQueries({ queryKey: ['incidents'] }),
+        queryClient.refetchQueries({ queryKey: ['routing-plans'] }),
+        queryClient.refetchQueries({ queryKey: ['health-status'] }),
+      ]).catch(() => {
+        // Silently ignore refetch errors
+      });
+    }, 60 * 1000); // 60 seconds = 1 minute
+
+    return () => clearInterval(refetchInterval);
+  }, [queryClient]);
 
   const submitMessage = useCallback(() => {
     processUserMessageRef.current(input.trim());

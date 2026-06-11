@@ -4005,6 +4005,141 @@ Thiếu tuổi → avatar dùng nhóm tuổi mặc định **trung niên**.
 
 **Bỏ qua:** *bỏ qua* → vào chat vận hành.
 
+#### 9.2.2 Tự động mở chat khi có đề xuất mới (Auto-chat-open)
+
+**Tính năng:** Khi hệ thống phát hiện đề xuất routing plan hoặc bảo trì mới, backend phát sự kiện SSE `pending_suggestions` → **chat tự động mở** và hiển thị danh sách đề xuất với **lời nhắc hành động**.
+
+**Backend (internal/api/sse.go):**
+- Mỗi giây, SSE listener kiểm tra `getPendingSuggestionsForSSE()` — tổng hợp routing plan + bảo trì pending từ DB
+- Nếu `has_suggestions=true` → gửi event `pending_suggestions` kèm dữ liệu:
+  ```json
+  {
+    "has_suggestions": true,
+    "plan_count": 2,
+    "maintenance_count": 1,
+    "routing_plans": [
+      {
+        "product_code": "ZING",
+        "sku_code": "20k",
+        "status": "pending",
+        "plan_id": "P001",
+        "proposed_pct": { "ESALE": 60, "IMEDIA": 40 },
+        "reason_vi": "Success rate thấp"
+      }
+    ],
+    "maintenance_suggestions": [
+      {
+        "product_code": "GARENA",
+        "sku_code": "50k",
+        "provider_code": "ESALE",
+        "detail": "Error rate cao",
+        "id": "M001"
+      }
+    ]
+  }
+  ```
+
+**Frontend (web/src/components/ChatWidget.tsx):**
+- Listener `useEffect` lắng nghe event `pending_suggestions` từ SSE
+- Gọi `formatSuggestionSystemMessage()` để định dạng thông báo tiếng Việt với emoji:
+  ```
+  📢 **Có việc mới cần xử lý!**
+
+  🔄 **Đề xuất Routing:** (Thay đổi phân phối traffic)
+  • ZING/20k → ESALE: 60% / IMEDIA: 40% (Success rate thấp)
+  • (và nhiều hơn nữa...)
+
+  🔧 **Đề xuất Bảo trì:**
+  • GARENA/50k — Error rate cao (và nhiều hơn...)
+
+  💡 **Hành động:**
+  • Gõ "xem pending" để xem chi tiết
+  • Admin: duyệt/từ chối ngay hoặc vào Dashboard
+  ```
+- Thêm system message vào chat
+- Gọi `setOpen(true)` → mở widget nếu chưa mở
+- Gọi `scrollFeedToBottom()` → cuộn đến message mới
+- Kiểm tra duplicate (message cuối có chứa emoji `📢`?) → tránh mở lại nhiều lần
+
+**Quy trình User:**
+```
+Dashboard đang xem
+    ↓
+Backend phát hiện routing plan mới
+    ↓
+SSE gửi pending_suggestions event
+    ↓
+Chat tự mở + hiển thị "📢 Có việc mới cần xử lý!"
+    ↓
+User xem danh sách đề xuất rõ ràng
+    ↓
+Gõ "xem pending" hoặc "duyệt" + product/SKU
+```
+
+**Code:**
+- Backend: `internal/api/chat_actions.go` → `getPendingSuggestionsForSSE()`, `formatSuggestionSystemMessage()`
+- Backend: `internal/api/sse.go` → thêm event `pending_suggestions` trong ticker loop
+- Frontend: `web/src/components/ChatWidget.tsx` → thêm `useEffect` lắng nghe SSE event
+- Frontend: `web/src/api/client.ts` → `eventsUrl()` trả về `/events` endpoint
+
+#### 9.2.3 Tự động cập nhật dữ liệu sau hành động bảo trì (Auto-refetch)
+
+**Tính năng:** Sau khi user thực hiện hành động bảo trì (duyệt/từ chối/gia hạn/mở lại/trả routing/chế độ tự động), chat hiển thị thông báo confirm rồi tự động refetch dữ liệu Dashboard **sau 1.2 giây** để cập nhật ngay. **Không reload trang** — giữ lại chat history.
+
+**Cơ chế:**
+1. **Keyword detection** trong response từ backend:
+   - `Đã bật bảo trì` → Set maintenance
+   - `Đã gia hạn` → Extend maintenance window
+   - `Đã từ chối` → Reject routing plan or maintenance
+   - `Đã duyệt` → Approve routing plan or maintenance
+   - `Đã mở lại` → Reopen service
+   - `Đã trả` → Restore baseline routing
+   - `Đã cập nhật` → Change scope auto mode
+
+2. **Frontend (web/src/components/ChatWidget.tsx):**
+   - Mutation `send.onSuccess()` callback:
+     1. Invalidate all query keys: `dashboard-overview`, `maintenance`, `incidents`, `routing-plans`, `health-status`
+     2. Kiểm tra reply message có chứa action keyword nào không
+     3. Nếu match → Sau 1.2 giây, gọi `queryClient.refetchQueries()` cho 5 queries trên (silent refetch ngầm trong background)
+   - Không gọi `window.location.reload()` → chat vẫn hiển thị
+
+3. **Auto-polling mỗi 1 phút:**
+   - `useEffect` hook: `setInterval(() => refetchQueries(), 60 * 1000)`
+   - Chạy liên tục khi component mount (chat widget vẫn open)
+   - Cập nhật data tự động ngay cả khi user chỉ xem (không hành động)
+   - Silent error handling — không báo lỗi nếu refetch thất bại
+
+**Quy trình User:**
+```
+Chat: "Duyệt thẻ Garena 50K bảo trì"
+    ↓
+Backend xử lý → Update DB → return "Đã duyệt bảo trì thẻ Garena 50K..."
+    ↓
+Chat hiển thị reply message (user thấy confirm) ✅
+    ↓
+1.2 giây → Refetch data ngầm (không reload page)
+    ↓
+Dashboard tự cập nhật:
+  - Bảo trì active đổi status
+  - Health status đổi
+  - Incident list update
+  - Chat history vẫn giữ nguyên ✅
+    ↓
+[Mỗi 60 giây] → Auto-polling refetch data để luôn fresh
+```
+
+**Lợi ích:**
+- ✅ **Giữ chat history** — không reload page
+- ✅ **User không cần F5** thủ công
+- ✅ **Data luôn fresh** từ server (refetch sau action + auto-polling 1 phút)
+- ✅ **Trải nghiệm smooth** — không gián đoạn hội thoại
+- ✅ **Silent refetch** — background update, không phiền người dùng
+
+**Code:**
+- Frontend: `web/src/components/ChatWidget.tsx`
+  - `send.onSuccess()`: keyword detection + refetch queries (không reload)
+  - New `useEffect`: auto-polling `setInterval(refetchQueries, 60000)`
+
 UI là **mặt tiếp xúc với người vận hành** — dùng được trên **điện thoại** và **PC**, nhận lệnh qua **chat** hoặc **micro**.
 
 ### 9.1 Vai trò

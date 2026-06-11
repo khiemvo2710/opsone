@@ -19,6 +19,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	var lastCycle uint64
+	var lastSuggestionCheck int64 // Track if we already sent suggestions in this second
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -47,6 +48,18 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 					"health_status": cycle.HealthStatus,
 					"health_label":  cycle.HealthStatus,
 				})
+
+				// Send pending suggestions when cycle finishes
+				now := time.Now().Unix()
+				if now != lastSuggestionCheck { // Only check once per second
+					lastSuggestionCheck = now
+					suggestions, err := s.getPendingSuggestionsForSSE(r.Context())
+					if err == nil && suggestions != nil {
+						if hasSuggestions := getBool(suggestions, "has_suggestions"); hasSuggestions {
+							send("pending_suggestions", suggestions)
+						}
+					}
+				}
 			}
 		}
 	}
