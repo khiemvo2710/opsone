@@ -166,6 +166,9 @@ func ShouldLookupMaintenance(userMsg string, hist []HistoryTurn) bool {
 	if IsMetricsQuery(userMsg) {
 		return false
 	}
+	if IsSetMaintenanceCommand(userMsg) {
+		return false
+	}
 	if IsMaintenanceQuery(userMsg) || IsMaintenanceScopeQuery(userMsg) {
 		return true
 	}

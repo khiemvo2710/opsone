@@ -8,8 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"opsone/internal/catalog"
 	"opsone/internal/chatresolve"
 	"opsone/internal/llm"
+	"opsone/internal/store"
 	"opsone/internal/tools"
 )
 
@@ -29,16 +31,6 @@ func chatSessionGet(sessionID string) []llm.Message {
 	return append([]llm.Message(nil), chatSessions.data[sessionID]...)
 }
 
-func (s *Server) recordChatIntentHit(intent chatresolve.ChatIntent, userMsg string) {
-	if intent == chatresolve.IntentUnknown {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = s.DB.BumpChatIntentStat(ctx, string(intent), userMsg)
-	}()
-}
 
 func chatSessionAppend(sessionID string, msgs ...llm.Message) {
 	if sessionID == "" {
@@ -63,30 +55,40 @@ func (s *Server) llmClient() *llm.Client {
 	})
 }
 
-func (s *Server) chatSystemPrompt(ctx context.Context, isAdmin bool) string {
-	catalog := ""
+func (s *Server) chatSystemPrompt(ctx context.Context, isAdmin bool, userDisplayName string) string {
+	catalogHint := ""
 	if products, err := s.DB.ListProducts(ctx, true); err == nil {
-		catalog = chatresolve.CatalogHint(products)
+		catalogHint = chatresolve.CatalogHint(products)
 	}
 	admin := ""
 	if isAdmin {
 		admin = `
-Quyền Admin: khi user YÊU CẦU RÕ RÀNG (duyệt/từ chối/approve/reject) routing hoặc bảo trì, bạn có thể gọi tool duyệt/từ chối.
+Quyền Admin: duyệt/từ chối routing hoặc bảo trì; bật/mở bảo trì; mở lại dịch vụ; đổi chế độ Tự động / Khung giờ / Chỉ đề xuất.
 Luôn gọi list_pending_actions trước khi duyệt nếu chưa biết plan_id hoặc scope.
-Sau khi duyệt/từ chối, tóm tắt kết quả bằng tiếng Việt.`
+Phản hồi sau hành động: 1) Kết quả (Đã/Không) 2) Chi tiết scope/thời gian 3) Gợi ý tiếp (tuỳ chọn) — tối đa 3 dòng.`
 	} else {
 		admin = `
 User không phải Admin: KHÔNG gọi tool duyệt/từ chối — hướng dẫn mở Dashboard hoặc liên hệ admin.`
 	}
-	return `Bạn là trợ lý vận hành OpsOne — trả lời bằng tiếng Việt, ngắn gọn, chuyên nghiệp.
+	userHint := ""
+	if userDisplayName != "" {
+		userHint = fmt.Sprintf(`
+User chat với tên hiển thị: %s. Luôn xưng hô đúng tên này; không dùng tên khác từ lịch sử hội thoại.`, userDisplayName)
+	}
+	return `Bạn là trợ lý vận hành ` + chatresolve.AssistantName + ` — trả lời bằng tiếng Việt, ngắn gọn, chuyên nghiệp.
+` + chatresolve.AssistantIdentityHint() + `
 Bạn hỗ trợ tra cứu metric, routing, bảo trì, sự cố và (nếu được phép) duyệt đề xuất khi user yêu cầu.
-` + admin + catalog + `
+` + admin + userHint + catalogHint + `
 Quy tắc:
 - Map tên viết tắt user (topup mobi, thẻ zing, thẻ garena, data vina…) sang đúng product_code trước khi gọi tool.
+- User yêu cầu thao tác Dashboard (duyệt, bảo trì, mở lại, gia hạn, đổi chế độ…) → gọi execute_ui_action hoặc tool chuyên biệt — cùng API nút UI.
+` + catalog.UIActionsPromptHint() + `
 - mobi/vina/viettel là nhà mạng/dịch vụ — KHÔNG phải provider; provider chỉ ESALE, IMEDIA, SHOPPAY.
 - Hỏi "dịch vụ X có đang bảo trì không" → get_maintenance(product=X), KHÔNG bắt buộc provider/sku; tóm tắt theo sku_code và provider_code từ kết quả.
 - Tối đa 3 tool tra cứu mỗi lượt hội thoại trừ khi user yêu cầu duyệt (cần list_pending_actions).
 - Không bịa số — chỉ dùng kết quả tool.
+- User muốn đổi tên, tuổi, xưng hô hoặc avatar chat → đồng ý cập nhật, không từ chối; xác nhận ngắn gọn.
+- User nói ngắn "duyệt"/"ok" hoặc "từ chối"/"không" → xử lý pending gần nhất (list_pending_actions nếu cần).
 - Câu hỏi ngoài phạm vi vận hành → từ chối lịch sự.`
 }
 
@@ -195,6 +197,51 @@ func chatToolDefs(isAdmin bool) []llm.ToolDef {
 			},
 			"required": []string{"product", "sku"},
 		}),
+		toolDef("set_maintenance", "Bật bảo trì thủ công (admin). Bỏ sku để áp toàn dịch vụ; bỏ provider để tất cả provider đang routing.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"product":      map[string]any{"type": "string"},
+				"sku":          map[string]any{"type": "string"},
+				"provider":     map[string]any{"type": "string", "description": "ESALE|IMEDIA|SHOPPAY — tùy chọn"},
+				"duration_min": map[string]any{"type": "integer"},
+				"starts_at":    map[string]any{"type": "string"},
+				"ends_at":      map[string]any{"type": "string"},
+			},
+			"required": []string{"product"},
+		}),
+		toolDef("reopen_service", "Mở lại dịch vụ — hủy BT active + baseline routing. Bỏ sku để mở toàn dịch vụ.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"product": map[string]any{"type": "string"},
+				"sku":     map[string]any{"type": "string"},
+			},
+			"required": []string{"product"},
+		}),
+		toolDef("set_scope_auto", "Đặt chế độ routing/BT: auto | time_window | recommend_only (Chỉ đề xuất).", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"product":      map[string]any{"type": "string"},
+				"sku":          map[string]any{"type": "string"},
+				"auto_action":  map[string]any{"type": "string", "description": "auto | time_window | recommend_only"},
+				"window_start": map[string]any{"type": "string"},
+				"window_end":   map[string]any{"type": "string"},
+			},
+			"required": []string{"product", "auto_action"},
+		}),
+		toolDef("execute_ui_action", "Thực hiện thao tác Dashboard (cùng API nút UI). action: list_pending|approve_reject|set_maintenance|extend_maintenance|reopen_service|restore_baseline|set_scope_auto. decision=reject khi approve_reject từ chối.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action":       map[string]any{"type": "string"},
+				"product":      map[string]any{"type": "string"},
+				"sku":          map[string]any{"type": "string"},
+				"provider":     map[string]any{"type": "string"},
+				"duration_min": map[string]any{"type": "integer"},
+				"auto_action":  map[string]any{"type": "string"},
+				"decision":     map[string]any{"type": "string", "description": "approve | reject — cho approve_reject"},
+				"utterance":    map[string]any{"type": "string", "description": "câu user gốc (tuỳ chọn)"},
+			},
+			"required": []string{"action"},
+		}),
 	}
 	return append(readOnly, adminTools...)
 }
@@ -210,35 +257,54 @@ func toolDef(name, desc string, params map[string]any) llm.ToolDef {
 	}
 }
 
-func (s *Server) chatAgentReply(ctx context.Context, sessionID, userMsg, actor string, isAdmin bool) (string, error) {
+func (s *Server) chatAgentReply(ctx context.Context, sessionID, userMsg, userDisplayName, actor string, isAdmin bool, out *ChatTurnOutcome) (string, error) {
 	hist := chatHistoryTurns(sessionID)
 	intent := chatresolve.DetectChatIntent(userMsg, hist)
-	s.recordChatIntentHit(intent, userMsg)
+	if out == nil {
+		out = chatTurnOutcomeInit(intent)
+	} else if out.IntentKey == "" && intent != chatresolve.IntentUnknown {
+		out.IntentKey = string(intent)
+	}
 
 	if reply, ok := s.tryChatMetricsReply(ctx, sessionID, userMsg); ok {
+		out.setDirectRoute("direct_metrics", userMsg)
+		s.recordChatIntentHit(intent, userMsg, out.Route, out.ActionResult)
+		chatSessionAppend(sessionID, llm.Message{Role: "user", Content: userMsg}, llm.Message{Role: "assistant", Content: reply})
+		return reply, nil
+	}
+	if reply, ok := s.tryChatCommandReply(ctx, sessionID, userMsg, actor, isAdmin); ok {
+		out.setDirectRoute("direct_"+chatCommandRouteKey(userMsg), userMsg)
+		s.recordChatIntentHit(intent, userMsg, out.Route, out.ActionResult)
 		chatSessionAppend(sessionID, llm.Message{Role: "user", Content: userMsg}, llm.Message{Role: "assistant", Content: reply})
 		return reply, nil
 	}
 	if reply, ok := s.tryChatMaintenanceReply(ctx, sessionID, userMsg); ok {
+		out.setDirectRoute("direct_maintenance", userMsg)
+		s.recordChatIntentHit(intent, userMsg, out.Route, out.ActionResult)
 		chatSessionAppend(sessionID, llm.Message{Role: "user", Content: userMsg}, llm.Message{Role: "assistant", Content: reply})
 		return reply, nil
 	}
 
 	client := s.llmClient()
 	if !client.Enabled() {
+		out.setDirectRoute("stub", userMsg)
+		s.recordChatIntentHit(intent, userMsg, out.Route, out.ActionResult)
 		return s.chatReplyStub(ctx, userMsg), nil
 	}
 
 	toolsList := chatToolDefs(isAdmin)
-	messages := []llm.Message{{Role: "system", Content: s.chatSystemPrompt(ctx, isAdmin)}}
+	messages := []llm.Message{{Role: "system", Content: s.chatSystemPrompt(ctx, isAdmin, userDisplayName)}}
 	if hist := chatSessionGet(sessionID); len(hist) > 0 {
 		messages = append(messages, hist...)
 	}
 	messages = append(messages, llm.Message{Role: "user", Content: userMsg})
+	out.Route = "llm"
 
 	for round := 0; round < chatMaxToolRounds; round++ {
 		assistant, err := client.ChatCompletion(ctx, messages, toolsList, 0.4)
 		if err != nil {
+			out.ActionResult = store.ChatActionError
+			s.recordChatIntentHit(intent, userMsg, out.Route, out.ActionResult)
 			return "", err
 		}
 		messages = append(messages, assistant)
@@ -248,12 +314,15 @@ func (s *Server) chatAgentReply(ctx context.Context, sessionID, userMsg, actor s
 			if reply == "" {
 				reply = "Xin lỗi, tôi chưa trả lời được. Bạn thử hỏi cụ thể hơn (product, SKU, provider)."
 			}
+			out.ActionResult = store.ChatActionSuccess
+			s.recordChatIntentHit(intent, userMsg, out.Route, out.ActionResult)
 			chatSessionAppend(sessionID, llm.Message{Role: "user", Content: userMsg}, assistant)
 			return reply, nil
 		}
 
 		for _, tc := range assistant.ToolCalls {
-			result, execErr := s.chatExecTool(ctx, tc.Function.Name, tc.Function.Arguments, actor, isAdmin)
+			out.appendTool(tc.Function.Name)
+			result, execErr := s.chatExecTool(ctx, sessionID, tc.Function.Name, tc.Function.Arguments, actor, isAdmin)
 			if execErr != nil {
 				result = map[string]any{"error": execErr.Error()}
 			}
@@ -266,10 +335,12 @@ func (s *Server) chatAgentReply(ctx context.Context, sessionID, userMsg, actor s
 			})
 		}
 	}
+	out.ActionResult = store.ChatActionNoOp
+	s.recordChatIntentHit(intent, userMsg, out.Route, out.ActionResult)
 	return "Cần thêm bước xử lý — mở Dashboard hoặc thử lại câu hỏi ngắn hơn.", nil
 }
 
-func (s *Server) chatExecTool(ctx context.Context, name, argsJSON, actor string, isAdmin bool) (any, error) {
+func (s *Server) chatExecTool(ctx context.Context, sessionID, name, argsJSON, actor string, isAdmin bool) (any, error) {
 	var args map[string]any
 	if argsJSON != "" {
 		_ = json.Unmarshal([]byte(argsJSON), &args)
@@ -356,7 +427,15 @@ func (s *Server) chatExecTool(ctx context.Context, name, argsJSON, actor string,
 		}
 		return map[string]any{"incidents": items}, nil
 	case "list_pending_actions":
-		return s.chatListPendingActions(ctx)
+		out, err := s.chatListPendingActions(ctx)
+		if err == nil {
+			if data, ok := out.(map[string]any); ok {
+				if f := chatSessionFocusFromPending(data); f.Kind != "" {
+					chatSessionFocusSet(sessionID, f)
+				}
+			}
+		}
+		return out, err
 	case "approve_routing_plan":
 		if !isAdmin {
 			return nil, fmt.Errorf("cần quyền Admin")
@@ -395,6 +474,51 @@ func (s *Server) chatExecTool(ctx context.Context, name, argsJSON, actor string,
 		}
 		msg, err := s.chatRejectScopeMaintenance(ctx, strArg(args, "product"), strArg(args, "sku"), actor)
 		return map[string]any{"message": msg}, err
+	case "set_maintenance":
+		if !isAdmin {
+			return nil, fmt.Errorf("cần quyền Admin")
+		}
+		product := strArg(args, "product")
+		sku := strArg(args, "sku")
+		if sku != "" {
+			sku = chatresolve.NormalizeSKU(sku)
+		}
+		msg, err := s.chatSetMaintenance(ctx, product, sku, strArg(args, "provider"),
+			intArg(args, "duration_min"), actor, "")
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"message": msg}, nil
+	case "reopen_service":
+		if !isAdmin {
+			return nil, fmt.Errorf("cần quyền Admin")
+		}
+		sku := strArg(args, "sku")
+		if sku != "" {
+			sku = chatresolve.NormalizeSKU(sku)
+		}
+		msg, err := s.chatReopenService(ctx, strArg(args, "product"), sku, actor)
+		return map[string]any{"message": msg}, err
+	case "set_scope_auto":
+		if !isAdmin {
+			return nil, fmt.Errorf("cần quyền Admin")
+		}
+		sku := strArg(args, "sku")
+		if sku != "" {
+			sku = chatresolve.NormalizeSKU(sku)
+		}
+		msg, err := s.chatSetScopeAuto(ctx, strArg(args, "product"), sku, strArg(args, "auto_action"),
+			fmt.Sprintf("%s %s", strArg(args, "window_start"), strArg(args, "window_end")))
+		return map[string]any{"message": msg}, err
+	case "execute_ui_action":
+		if !isAdmin {
+			return nil, fmt.Errorf("cần quyền Admin")
+		}
+		msg, err := s.executeUIActionFromTool(ctx, sessionID, args, actor, isAdmin)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"message": msg}, nil
 	default:
 		return nil, fmt.Errorf("tool không hỗ trợ: %s", name)
 	}

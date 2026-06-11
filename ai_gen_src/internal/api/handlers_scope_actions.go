@@ -321,9 +321,21 @@ func (s *Server) handleScopeMaintenanceReopenService(w http.ResponseWriter, r *h
 		cancelled, err = s.DB.CancelMaintenanceByIDs(ctx, body.MaintenanceIDs, by)
 	} else {
 		cancelled, err = s.DB.CancelActiveMaintenanceForSKU(ctx, product, sku, by)
+		if err == nil && cancelled == 0 {
+			if ids := s.activeMaintenanceIDsForScope(ctx, product, sku); len(ids) > 0 {
+				cancelled, err = s.DB.CancelMaintenanceByIDs(ctx, ids, by)
+			}
+		}
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	if n, err := s.DB.CountActiveMaintenanceForSKU(ctx, product, sku); err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	} else if n > 0 {
+		writeError(w, http.StatusBadRequest, "reopen_failed", fmt.Sprintf("vẫn còn %d cửa sổ bảo trì active", n))
 		return
 	}
 

@@ -159,3 +159,15 @@ export function datetimeRangeError(start: string, end: string): string | null {
   }
   return null;
 }
+
+/** Thời gian tin chat — hôm nay chỉ giờ, ngày khác kèm dd/mm/yyyy. */
+export function formatChatTime(ms: number): string {
+  const d = new Date(ms);
+  if (!Number.isFinite(d.getTime())) return '';
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const { hour, period } = hour12Parts(d.getHours());
+  const time = `${pad2(hour)}:${pad2(d.getMinutes())} ${period}`;
+  if (sameDay) return time;
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()} ${time}`;
+}

@@ -6,14 +6,36 @@ Set-Location $ProjectRoot
 
 Write-Host "Go: $(go version)"
 
+function Test-OpsOneMysqlPing {
+    docker compose exec -T mysql mysqladmin ping -h localhost -u root -prootsecret --silent *>$null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Ensure-OpsOneMysqlDatabase {
+    # Reused Docker volumes may lack opsone DB / app grants (entrypoint only runs on first init).
+    $dbExists = docker exec opsone-mysql mysql -uroot -prootsecret -N -e `
+        "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='opsone';" 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($dbExists)) {
+        throw "Cannot inspect MySQL schemas as root. Check: docker compose logs mysql"
+    }
+    if ([int]$dbExists.Trim() -eq 0) {
+        Write-Host "Database opsone missing on existing volume - creating app user grants..."
+        $bootstrapSql = 'CREATE DATABASE IF NOT EXISTS opsone CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER IF NOT EXISTS ''app''@''%'' IDENTIFIED BY ''secret''; GRANT ALL PRIVILEGES ON opsone.* TO ''app''@''%''; FLUSH PRIVILEGES;'
+        docker exec opsone-mysql mysql -uroot -prootsecret -e $bootstrapSql *>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to bootstrap database 'opsone'. Try: docker compose down -v"
+        }
+    }
+}
+
 function Wait-OpsOneMysqlReady {
     param([int]$TimeoutSec = 120)
     Write-Host "Waiting for MySQL (up to ${TimeoutSec}s)..."
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        docker compose exec -T mysql mysqladmin ping -h localhost -u root -prootsecret --silent 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret opsone -e "SELECT 1" 2>$null | Out-Null
+        if (Test-OpsOneMysqlPing) {
+            Ensure-OpsOneMysqlDatabase
+            docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret opsone -e "SELECT 1" *>$null
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "MySQL is ready."
                 return
@@ -21,7 +43,7 @@ function Wait-OpsOneMysqlReady {
         }
         Start-Sleep -Seconds 2
     }
-    throw "MySQL did not become ready within ${TimeoutSec}s. Check: docker compose logs mysql"
+    throw "MySQL did not become ready within ${TimeoutSec}s. Try: docker compose down -v; then Invoke-OpsOneReset. Logs: docker compose logs mysql"
 }
 
 function Invoke-OpsOneMysql {
@@ -104,7 +126,11 @@ function Add-OpsOneNodeToPath {
     }
 }
 
-Write-Host "Loaded: Invoke-OpsOneReset (DROP+CREATE schema + seed), Invoke-OpsOneClearRuntime, Invoke-OpsOneTest, Invoke-OpsOneE2E, Start-OpsOneAPI, Start-OpsOneMock, Start-OpsOneAgent, Start-OpsOneWeb, Add-OpsOneNodeToPath"
+function Open-OpsOneDevPort5173 {
+    & (Join-Path $PSScriptRoot 'Open-OpsOneDevPort5173.ps1')
+}
+
+Write-Host "Loaded: Invoke-OpsOneReset (DROP+CREATE schema + seed), Invoke-OpsOneClearRuntime, Invoke-OpsOneTest, Invoke-OpsOneE2E, Start-OpsOneAPI, Start-OpsOneMock, Start-OpsOneAgent, Start-OpsOneWeb, Add-OpsOneNodeToPath, Open-OpsOneDevPort5173"
 
 if ($MyInvocation.InvocationName -ne '.') {
     Write-Host ''

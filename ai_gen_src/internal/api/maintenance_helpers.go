@@ -175,6 +175,30 @@ func applyMaintenanceTargets(
 	return applied, nil
 }
 
+// activeMaintenanceIDsForScope lists maintenance_ids still in effect (matches CancelActiveMaintenanceForSKU).
+func (s *Server) activeMaintenanceIDsForScope(ctx context.Context, product, sku string) []string {
+	now := time.Now()
+	seen := map[string]struct{}{}
+	var ids []string
+	for _, status := range []string{"active", "scheduled"} {
+		rows, err := s.DB.ListMaintenanceWindows(ctx, product, status, 500)
+		if err != nil {
+			continue
+		}
+		for _, r := range rows {
+			if r.SKUCode != sku || !r.EndsAt.After(now) {
+				continue
+			}
+			if _, dup := seen[r.MaintenanceID]; dup {
+				continue
+			}
+			seen[r.MaintenanceID] = struct{}{}
+			ids = append(ids, r.MaintenanceID)
+		}
+	}
+	return ids
+}
+
 func parseFlexibleTime(raw string) (time.Time, error) {
 	formats := []string{
 		time.RFC3339,

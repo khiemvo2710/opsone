@@ -38,7 +38,7 @@ export function useOverallHealth() {
     return {
       status,
       label: healthLabel(status),
-      summary: overallHealthSummary(status, health?.health_summary),
+      summary: overallHealthSummary(status, health?.health_summary, overview?.rows),
       cycleId: health?.cycle_id,
     };
   }, [health?.health_status, health?.health_summary, health?.cycle_id, overview?.rows, thresholdsByProduct]);

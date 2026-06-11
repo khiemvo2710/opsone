@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"opsone/internal/catalog"
 	"opsone/internal/domain"
 	"opsone/internal/store"
 )
@@ -221,7 +223,7 @@ func aggregateCycleHealth(products []ProductContext) (health, summary, decision 
 		case "red":
 			health = "red"
 			decision = "incident"
-			redProducts = append(redProducts, p.Product.ProductCode)
+			redProducts = append(redProducts, catalog.ProductDisplayLabel(p.Product))
 		case "yellow":
 			if health != "red" {
 				health = "yellow"
@@ -231,7 +233,7 @@ func aggregateCycleHealth(products []ProductContext) (health, summary, decision 
 	}
 
 	if len(redProducts) > 0 {
-		summary = fmt.Sprintf("Sự cố: %v", redProducts)
+		summary = fmt.Sprintf("Sự cố: %s", strings.Join(redProducts, ", "))
 	} else if health == "yellow" {
 		summary = "Một số sản phẩm vượt ngưỡng — đang theo dõi"
 	} else {

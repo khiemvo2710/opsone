@@ -74,13 +74,64 @@ export function healthLabel(status: HealthStatus): string {
 export function overallHealthSummary(
   status: HealthStatus,
   apiSummary?: string,
+  overviewRows?: DashboardOverviewRow[],
 ): string | undefined {
   const key = normalizeHealth(status);
   if (key === 'red') {
-    return apiSummary && apiSummary.includes('Sự cố') ? apiSummary : 'Có SKU hoặc loại dịch vụ đang báo đỏ';
+    const fromOverview = incidentSummaryFromOverview(overviewRows);
+    if (fromOverview) return fromOverview;
+    const formatted = formatLegacyIncidentSummary(apiSummary);
+    if (formatted) return formatted;
+    return 'Có SKU hoặc loại dịch vụ đang báo đỏ';
   }
   if (key === 'yellow') {
     return apiSummary || 'Một số sản phẩm vượt ngưỡng — đang theo dõi';
   }
   return apiSummary || 'Hệ thống ổn định';
+}
+
+const PRODUCT_CODE_RE = /^[A-Z][A-Z0-9_]+$/;
+
+const FALLBACK_LABELS: Record<string, string> = {
+  MOBIFONE: 'Thẻ Mobifone',
+  VINAPHONE: 'Thẻ Vinaphone',
+  VIETTEL: 'Thẻ Viettel',
+  ZING: 'Thẻ Zing',
+  GARENA: 'Thẻ Garena',
+  TOPUP_MOBI: 'Topup Mobifone',
+  TOPUP_VINA: 'Topup Vinaphone',
+  TOPUP_VIETTEL: 'Topup Viettel',
+  DATA_MOBI: 'Data Mobifone',
+  DATA_VINA: 'Data Vinaphone',
+  DATA_VIETTEL: 'Data Viettel',
+};
+
+function productLabel(code: string, rowLabel?: string): string {
+  if (rowLabel) return rowLabel;
+  return FALLBACK_LABELS[code] ?? code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function incidentSummaryFromOverview(rows?: DashboardOverviewRow[]): string | undefined {
+  if (!rows?.length) return undefined;
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const row of rows) {
+    if (normalizeHealth(row.health_status) !== 'red') continue;
+    if (seen.has(row.product_code)) continue;
+    seen.add(row.product_code);
+    labels.push(productLabel(row.product_code, row.product_label));
+  }
+  labels.sort((a, b) => a.localeCompare(b, 'vi'));
+  if (labels.length === 0) return undefined;
+  return `Sự cố: ${labels.join(', ')}`;
+}
+
+function formatLegacyIncidentSummary(apiSummary?: string): string | undefined {
+  if (!apiSummary?.startsWith('Sự cố:')) return apiSummary;
+  const rest = apiSummary.slice('Sự cố:'.length).trim().replace(/^\[|\]$/g, '');
+  const tokens = rest.split(/[\s,;]+/).map((t) => t.trim()).filter(Boolean);
+  const codes = tokens.filter((t) => PRODUCT_CODE_RE.test(t));
+  if (codes.length === 0) return apiSummary;
+  const labels = [...new Set(codes.map((c) => productLabel(c)))].sort((a, b) => a.localeCompare(b, 'vi'));
+  return `Sự cố: ${labels.join(', ')}`;
 }

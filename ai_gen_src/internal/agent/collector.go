@@ -268,7 +268,7 @@ func aggregateProductHealth(pc ProductContext) (healthStatus, summary, state str
 		return healthStatus, "Ổn định", state
 	}
 	if len(issues) > 2 {
-		summary = fmt.Sprintf("%s — %d scope cần theo dõi", pc.Product.ProductCode, len(issues))
+		summary = fmt.Sprintf("%s — %d scope cần theo dõi", productDisplayName(pc), len(issues))
 	} else {
 		summary = strings.Join(issues, "; ")
 	}

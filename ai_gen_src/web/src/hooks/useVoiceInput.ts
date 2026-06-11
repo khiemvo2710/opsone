@@ -9,21 +9,74 @@ export const VOICE_SILENCE_MS = 2000;
 const WATCHDOG_INTERVAL_MS = 5000;
 const WATCHDOG_STALE_MS = 12000;
 
-/** Nói các cụm này → tắt mic, không gửi chat. */
-export const VOICE_MIC_OFF_PHRASES = [
+/** Nói các cụm này → bật mic (mở chat nếu đang đóng). */
+export const VOICE_MIC_ON_PHRASES = [
+  'bật mic',
+  'bat mic',
+  'mở mic',
+  'mo mic',
+  'bật micro',
+  'bat micro',
+  'mở micro',
+  'mo micro',
+  'bật microphone',
+  'mở microphone',
+] as const;
+
+/** Nói các cụm này → đóng khung chat (mic vẫn bật). */
+export const VOICE_CLOSE_CHAT_PHRASES = [
+  'đóng chat',
+  'dong chat',
+  'thu gọn chat',
+  'thu gon chat',
+  'ẩn chat',
+  'an chat',
+  'đóng khung chat',
+  'dong khung chat',
+] as const;
+
+/** Nói các cụm này → tắt mic và đóng chat. */
+export const VOICE_END_SESSION_PHRASES = [
   'tắt mic',
   'tắt micro',
   'tắt microphone',
-  'dừng mic',
-  'thôi mic',
-  'ngừng nghe',
-  'ngừng mic',
-  'kết thúc cuộc trò chuyện',
-  'kết thúc hội thoại',
-  'kết thúc chat',
-  'dừng nghe',
-  'tắt đi',
+  'bye bye',
+  'baibai',
+  'bye',
 ] as const;
+
+export const VOICE_WAKE_WORD = 'alo';
+
+function phraseMatches(norm: string, phrase: string): boolean {
+  const p = normalizeForVoiceMatch(phrase);
+  return norm === p || norm.endsWith(` ${p}`) || norm.includes(` ${p} `) || norm.startsWith(`${p} `);
+}
+
+function matchesAnyPhrase(norm: string, phrases: readonly string[]): boolean {
+  if (!norm) return false;
+  return phrases.some((phrase) => phraseMatches(norm, phrase));
+}
+
+export function matchesCloseChatPhrase(text: string): boolean {
+  return matchesAnyPhrase(normalizeForVoiceMatch(text), VOICE_CLOSE_CHAT_PHRASES);
+}
+
+export function matchesMicOnPhrase(text: string): boolean {
+  return matchesAnyPhrase(normalizeForVoiceMatch(text), VOICE_MIC_ON_PHRASES);
+}
+
+export function matchesEndSessionPhrase(text: string): boolean {
+  return matchesAnyPhrase(normalizeForVoiceMatch(text), VOICE_END_SESSION_PHRASES);
+}
+
+function resolveVoiceCommand(text: string): 'mic_on' | 'close_chat' | 'end_session' | null {
+  const norm = normalizeForVoiceMatch(text);
+  if (!norm) return null;
+  if (matchesEndSessionPhrase(norm)) return 'end_session';
+  if (matchesMicOnPhrase(norm)) return 'mic_on';
+  if (matchesCloseChatPhrase(norm)) return 'close_chat';
+  return null;
+}
 
 function normalizeForVoiceMatch(text: string): string {
   return text
@@ -37,15 +90,112 @@ function normalizeForVoiceMatch(text: string): string {
 }
 
 export function matchesMicOffPhrase(text: string): boolean {
+  return matchesEndSessionPhrase(text);
+}
+
+/** Các biến thể STT của wake word "alo". */
+const ALO_WAKE_ALIASES = 'alo|a\\s*lo|allo';
+const ALO_VOCATIVE = 'oi|ne|a|nha|nhe|day|di|em|ban|no';
+const ALO_LEADING = 'oi|hey|a|e|em|no|ua|nay';
+
+const ALO_WAKE_NAME_RE = new RegExp(
+  `(?:^|\\s)(?:${ALO_WAKE_ALIASES})(?:\\s+(?:${ALO_VOCATIVE}))*`,
+);
+
+const ALO_WAKE_HEAD_RE = new RegExp(
+  `^(?:(?:${ALO_LEADING})\\s+)*(?:${ALO_WAKE_ALIASES})(?:\\s+(?:${ALO_VOCATIVE}))*`,
+);
+
+/** Phát hiện gọi "alo" để mở chat + mic. */
+export function matchesAloWake(text: string): boolean {
   const norm = normalizeForVoiceMatch(text);
   if (!norm) return false;
-  return VOICE_MIC_OFF_PHRASES.some((phrase) => {
-    const p = normalizeForVoiceMatch(phrase);
-    return norm === p || norm.endsWith(` ${p}`) || norm.includes(` ${p} `) || norm.startsWith(`${p} `);
+  if (ALO_WAKE_HEAD_RE.test(norm)) return true;
+  if (!ALO_WAKE_NAME_RE.test(norm)) return false;
+  return norm.split(/\s+/).length <= 6;
+}
+
+/** @deprecated Dùng matchesAloWake */
+export const matchesZalopayWake = matchesAloWake;
+
+/** Bỏ phần "alo" — phần còn lại đưa vào ô chat. */
+export function stripAloWakePrefix(text: string): string {
+  const norm = normalizeForVoiceMatch(text);
+  if (!norm || !matchesAloWake(norm)) return norm;
+  return norm
+    .replace(ALO_WAKE_NAME_RE, ' ')
+    .replace(new RegExp(`^(?:(?:${ALO_LEADING})\\s+)*`), '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** @deprecated Dùng stripAloWakePrefix */
+export const stripZalopayWakePrefix = stripAloWakePrefix;
+
+/** Xin quyền mic/STT sau thao tác user (click) — cần trước khi nghe nền "alo". */
+export function primeSpeechRecognition(): Promise<boolean> {
+  const Ctor = getSpeechRecognition();
+  if (!Ctor) return Promise.resolve(false);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+
+    const recognition = new Ctor();
+    recognition.lang = 'vi-VN';
+    recognition.interimResults = false;
+    recognition.continuous = false;
+
+    const cleanup = () => {
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onend = null;
+      recognition.onerror = null;
+      try {
+        recognition.abort();
+      } catch {
+        try {
+          recognition.stop();
+        } catch {
+          /* noop */
+        }
+      }
+    };
+
+    recognition.onstart = () => {
+      window.setTimeout(() => {
+        cleanup();
+        finish(true);
+      }, 120);
+    };
+
+    recognition.onend = () => finish(true);
+
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      cleanup();
+      finish(event.error !== 'not-allowed' && event.error !== 'service-not-allowed');
+    };
+
+    try {
+      recognition.start();
+    } catch {
+      cleanup();
+      finish(false);
+      return;
+    }
+
+    window.setTimeout(() => {
+      cleanup();
+      finish(true);
+    }, 1500);
   });
 }
 
-function getSpeechRecognition(): SpeechRecognitionCtor | null {
+export function getSpeechRecognition(): SpeechRecognitionCtor | null {
   const w = window as Window & {
     SpeechRecognition?: SpeechRecognitionCtor;
     webkitSpeechRecognition?: SpeechRecognitionCtor;
@@ -89,11 +239,24 @@ export interface VoiceInputOptions {
   onTranscript?: (text: string) => void;
   /** Gửi lệnh sau khoảng im lặng VOICE_SILENCE_MS (mic vẫn bật để hội thoại tiếp). */
   onSubmit: (text: string) => void;
+  /** "Đóng chat" — thu gọn khung chat, mic vẫn bật. */
+  onCloseChat?: () => void;
+  /** "Bật mic" / "mở mic" — mở chat + bật mic. */
+  onMicOn?: () => void;
+  /** "Tắt mic" / "bye bye" — tắt mic và đóng chat. */
+  onEndSession?: () => void;
   /** Thời gian im lặng trước khi tự gửi (ms). */
   silenceMs?: number;
 }
 
-export function useVoiceInput({ onTranscript, onSubmit, silenceMs = VOICE_SILENCE_MS }: VoiceInputOptions) {
+export function useVoiceInput({
+  onTranscript,
+  onSubmit,
+  onCloseChat,
+  onMicOn,
+  onEndSession,
+  silenceMs = VOICE_SILENCE_MS,
+}: VoiceInputOptions) {
   const [supported, setSupported] = useState(false);
   const [micOn, setMicOn] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -109,12 +272,18 @@ export function useVoiceInput({ onTranscript, onSubmit, silenceMs = VOICE_SILENC
   const restartBackoffRef = useRef(150);
   const onTranscriptRef = useRef(onTranscript);
   const onSubmitRef = useRef(onSubmit);
+  const onCloseChatRef = useRef(onCloseChat);
+  const onMicOnRef = useRef(onMicOn);
+  const onEndSessionRef = useRef(onEndSession);
   const spawnRecognitionRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
     onSubmitRef.current = onSubmit;
-  }, [onTranscript, onSubmit]);
+    onCloseChatRef.current = onCloseChat;
+    onMicOnRef.current = onMicOn;
+    onEndSessionRef.current = onEndSession;
+  }, [onTranscript, onSubmit, onCloseChat, onMicOn, onEndSession]);
 
   useEffect(() => {
     setSupported(getSpeechRecognition() !== null);
@@ -173,16 +342,46 @@ export function useVoiceInput({ onTranscript, onSubmit, silenceMs = VOICE_SILENC
     }, 80);
   }, [clearRestartTimer]);
 
+  const applyVoiceCommand = useCallback(
+    (text: string): boolean => {
+      const cmd = resolveVoiceCommand(text);
+      if (!cmd) return false;
+
+      clearSilenceTimer();
+      clearTranscriptEverywhere();
+
+      if (cmd === 'end_session') {
+        stop();
+        onEndSessionRef.current?.();
+        return true;
+      }
+
+      if (cmd === 'mic_on') {
+        onMicOnRef.current?.();
+        ignoreResultsUntilRef.current = Date.now() + 800;
+        if (!micSessionRef.current) {
+          restartAfterSubmit();
+        } else {
+          clearTranscriptEverywhere();
+          restartAfterSubmit();
+        }
+        return true;
+      }
+
+      onCloseChatRef.current?.();
+      ignoreResultsUntilRef.current = Date.now() + 800;
+      restartAfterSubmit();
+      return true;
+    },
+    [clearSilenceTimer, clearTranscriptEverywhere, restartAfterSubmit, stop],
+  );
+
   const submitFromSilence = useCallback(() => {
     const cmd = transcriptRef.current.trim();
     if (!cmd) return;
 
     clearSilenceTimer();
-    if (matchesMicOffPhrase(cmd)) {
-      clearTranscriptEverywhere();
-      stop();
-      return;
-    }
+    if (applyVoiceCommand(cmd)) return;
 
     clearTranscriptEverywhere();
     onSubmitRef.current(cmd);
@@ -190,7 +389,7 @@ export function useVoiceInput({ onTranscript, onSubmit, silenceMs = VOICE_SILENC
     // Chặn onresult cũ; khởi động session STT mới để ô nhập không dính câu trước.
     ignoreResultsUntilRef.current = Date.now() + 800;
     restartAfterSubmit();
-  }, [clearSilenceTimer, clearTranscriptEverywhere, restartAfterSubmit, stop]);
+  }, [applyVoiceCommand, clearSilenceTimer, clearTranscriptEverywhere, restartAfterSubmit]);
 
   const scheduleSilenceSubmit = useCallback(() => {
     clearSilenceTimer();
@@ -270,12 +469,7 @@ export function useVoiceInput({ onTranscript, onSubmit, silenceMs = VOICE_SILENC
       const trimmed = collectTranscript(event);
       if (!trimmed) return;
 
-      if (matchesMicOffPhrase(trimmed)) {
-        clearSilenceTimer();
-        clearTranscriptEverywhere();
-        stop();
-        return;
-      }
+      if (applyVoiceCommand(trimmed)) return;
 
       lastResultAtRef.current = Date.now();
       transcriptRef.current = trimmed;
@@ -322,18 +516,13 @@ export function useVoiceInput({ onTranscript, onSubmit, silenceMs = VOICE_SILENC
       if (!micSessionRef.current) return;
       scheduleRestart(Math.min(restartBackoffRef.current + 200, 1200));
     }
-  }, [clearRestartTimer, clearSilenceTimer, clearTranscriptEverywhere, scheduleRestart, scheduleSilenceSubmit, stop]);
+  }, [applyVoiceCommand, clearRestartTimer, scheduleRestart, scheduleSilenceSubmit, stop]);
 
   useEffect(() => {
     spawnRecognitionRef.current = spawnRecognition;
   }, [spawnRecognition]);
 
-  const start = useCallback(() => {
-    if (micSessionRef.current) {
-      stop();
-      return;
-    }
-
+  const beginMicSession = useCallback(() => {
     const Ctor = getSpeechRecognition();
     if (!Ctor) return;
 
@@ -347,7 +536,20 @@ export function useVoiceInput({ onTranscript, onSubmit, silenceMs = VOICE_SILENC
     setMicOn(true);
     scheduleWatchdog();
     spawnRecognition();
-  }, [scheduleWatchdog, spawnRecognition, stop]);
+  }, [scheduleWatchdog, spawnRecognition]);
+
+  const start = useCallback(() => {
+    if (micSessionRef.current) {
+      stop();
+      return;
+    }
+    beginMicSession();
+  }, [beginMicSession, stop]);
+
+  const ensureMicOn = useCallback(() => {
+    if (micSessionRef.current) return;
+    beginMicSession();
+  }, [beginMicSession]);
 
   const setTranscriptSafe = useCallback((text: string) => {
     transcriptRef.current = text;
@@ -357,5 +559,5 @@ export function useVoiceInput({ onTranscript, onSubmit, silenceMs = VOICE_SILENC
 
   const state: VoiceState = micOn ? 'listening' : 'idle';
 
-  return { supported, micOn, state, transcript, setTranscript: setTranscriptSafe, start, stop };
+  return { supported, micOn, state, transcript, setTranscript: setTranscriptSafe, start, ensureMicOn, stop };
 }

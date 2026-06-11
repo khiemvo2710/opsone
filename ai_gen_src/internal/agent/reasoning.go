@@ -200,7 +200,7 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 					if err := r.applyRoutingPlanAuto(ctx, cyclePtr, pc, worst, plan, &pc.LastIncidentID); err != nil {
 						return err
 					}
-					pc.HealthSummary = fmt.Sprintf("%s — Đã tự động áp dụng routing", pc.Product.ProductCode)
+					pc.HealthSummary = fmt.Sprintf("%s — Đã tự động áp dụng routing", productDisplayName(*pc))
 					pc.HealthStatus = "yellow"
 					routing = currentRouting(*pc, *worst)
 					if ShouldForceAutoMaintenance(*pc, worst.SKUCode, routing, prodTh) {
@@ -211,14 +211,14 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 						if err := r.applyMaintenanceAuto(ctx, pc, worst, detail); err != nil {
 							return err
 						}
-						pc.HealthSummary = fmt.Sprintf("%s — Đã tự động bảo trì %s", pc.Product.ProductCode, worst.ProviderCode)
+						pc.HealthSummary = fmt.Sprintf("%s — Đã tự động bảo trì %s", productDisplayName(*pc), worst.ProviderCode)
 						pc.HealthStatus = "red"
 					}
 				} else {
 					if err := r.DB.UpdatePendingRoutingPlanForScope(ctx, cyclePtr, pc.Product.ProductCode, worst.SKUCode, plan); err != nil {
 						return err
 					}
-					pc.HealthSummary = fmt.Sprintf("%s — Kế hoạch routing chờ duyệt", pc.Product.ProductCode)
+					pc.HealthSummary = fmt.Sprintf("%s — Kế hoạch routing chờ duyệt", productDisplayName(*pc))
 					pc.HealthStatus = "yellow"
 				}
 				break
@@ -227,7 +227,7 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 				if err := r.applyRoutingPlanAuto(ctx, cyclePtr, pc, worst, plan, &pc.LastIncidentID); err != nil {
 					return err
 				}
-				pc.HealthSummary = fmt.Sprintf("%s — Đã tự động áp dụng routing", pc.Product.ProductCode)
+				pc.HealthSummary = fmt.Sprintf("%s — Đã tự động áp dụng routing", productDisplayName(*pc))
 				pc.HealthStatus = "yellow"
 				routing = currentRouting(*pc, *worst)
 				if ShouldForceAutoMaintenance(*pc, worst.SKUCode, routing, prodTh) {
@@ -238,7 +238,7 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 					if err := r.applyMaintenanceAuto(ctx, pc, worst, detail); err != nil {
 						return err
 					}
-					pc.HealthSummary = fmt.Sprintf("%s — Đã tự động bảo trì %s", pc.Product.ProductCode, worst.ProviderCode)
+					pc.HealthSummary = fmt.Sprintf("%s — Đã tự động bảo trì %s", productDisplayName(*pc), worst.ProviderCode)
 					pc.HealthStatus = "red"
 				}
 				break
@@ -247,7 +247,7 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 			if err != nil {
 				return err
 			}
-			pc.HealthSummary = fmt.Sprintf("%s — Kế hoạch routing chờ duyệt", pc.Product.ProductCode)
+			pc.HealthSummary = fmt.Sprintf("%s — Kế hoạch routing chờ duyệt", productDisplayName(*pc))
 			pc.HealthStatus = "yellow"
 		case "maintenance":
 			if inReopenGrace && !forceMaint && !forceAllMaint {
@@ -263,7 +263,7 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 				if err := r.applyMaintenanceAuto(ctx, pc, worst, detail); err != nil {
 					return err
 				}
-				pc.HealthSummary = fmt.Sprintf("%s — Đã tự động bảo trì %s", pc.Product.ProductCode, worst.ProviderCode)
+				pc.HealthSummary = fmt.Sprintf("%s — Đã tự động bảo trì %s", productDisplayName(*pc), worst.ProviderCode)
 				pc.HealthStatus = "red"
 				break
 			}
@@ -275,7 +275,7 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 			if err := r.DB.InsertRecommendation(ctx, cyclePtr, incPtr, pc.Product.ProductCode, worst.SKUCode, "maintenance", detail); err != nil {
 				return err
 			}
-			pc.HealthSummary = fmt.Sprintf("%s — Đề xuất bảo trì %s", pc.Product.ProductCode, worst.ProviderCode)
+			pc.HealthSummary = fmt.Sprintf("%s — Đề xuất bảo trì %s", productDisplayName(*pc), worst.ProviderCode)
 			pc.HealthStatus = "red"
 		}
 	} else if thRes.Breached {
@@ -290,7 +290,7 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 			}
 		}
 		pc.HealthStatus = "yellow"
-		pc.HealthSummary = output.MonitorRecommendation(pc.Product.ProductCode)
+		pc.HealthSummary = output.MonitorRecommendation(productDisplayName(*pc))
 	}
 	return nil
 }

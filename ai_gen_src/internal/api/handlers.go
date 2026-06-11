@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"opsone/internal/catalog"
+	"opsone/internal/chatresolve"
 	"opsone/internal/mock"
 	"opsone/internal/output"
 	"opsone/internal/store"
@@ -51,8 +53,23 @@ func (s *Server) handleHealthStatus(w http.ResponseWriter, r *http.Request) {
 		products = append(products, item)
 	}
 	summary := ""
-	if cycle.HealthSummary.Valid {
-		summary = cycle.HealthSummary.String
+	labelMap := map[string]string{}
+	if products, err := s.DB.ListProducts(ctx, false); err == nil {
+		labelMap = catalog.ProductLabelMap(products)
+	}
+	if cycle.HealthStatus == "red" {
+		var redCodes []string
+		for _, p := range rows {
+			if p.HealthStatus == "red" {
+				redCodes = append(redCodes, p.ProductCode)
+			}
+		}
+		if len(redCodes) > 0 {
+			summary = fmt.Sprintf("Sự cố: %s", catalog.JoinProductDisplayLabels(redCodes, labelMap))
+		}
+	}
+	if summary == "" && cycle.HealthSummary.Valid {
+		summary = catalog.FormatCycleHealthSummary(cycle.HealthSummary.String, labelMap)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cycle_id":       cycle.ID,
@@ -467,8 +484,11 @@ func (s *Server) handleMockGenerate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChatPost(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Message   string `json:"message"`
-		SessionID string `json:"session_id"`
+		Message         string `json:"message"`
+		SessionID       string `json:"session_id"`
+		UserDisplayName string `json:"user_display_name"`
+		InputSource     string `json:"input_source"`
+		STTRaw          string `json:"stt_raw"`
 	}
 	if err := decodeJSON(r, &body); err != nil || body.Message == "" {
 		writeError(w, http.StatusBadRequest, "invalid_input", "Thiếu message")
@@ -476,11 +496,25 @@ func (s *Server) handleChatPost(w http.ResponseWriter, r *http.Request) {
 	}
 	isAdmin := requireAdminSilent(r, s.Config.DevAuthBypass)
 	actor := actorFromRequest(r, s.Config.DevAuthBypass)
-	reply, err := s.chatAgentReply(r.Context(), body.SessionID, body.Message, actor, isAdmin)
+	turnInput := ChatTurnInput{
+		SessionID:   strings.TrimSpace(body.SessionID),
+		UserID:      actor,
+		Message:     body.Message,
+		STTRaw:      strings.TrimSpace(body.STTRaw),
+		InputSource: parseChatInputSource(body.InputSource),
+		IsAdmin:     isAdmin,
+	}
+	out := &ChatTurnOutcome{ActionResult: store.ChatActionSuccess}
+	start := time.Now()
+	reply, err := s.chatAgentReply(r.Context(), turnInput.SessionID, body.Message, strings.TrimSpace(body.UserDisplayName), actor, isAdmin, out)
+	latencyMS := int(time.Since(start).Milliseconds())
 	if err != nil {
+		out.ActionResult = store.ChatActionError
+		s.persistChatTurn(turnInput, out, "", latencyMS)
 		writeError(w, http.StatusBadGateway, "llm_error", err.Error())
 		return
 	}
+	s.persistChatTurn(turnInput, out, reply, latencyMS)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": body.SessionID,
 		"reply":      reply,
@@ -504,9 +538,11 @@ func (s *Server) chatReply(ctx context.Context, msg string) string {
 		if len(rows) == 0 {
 			return "Không có sự cố mở gần đây."
 		}
-		return fmt.Sprintf("Sự cố gần nhất: %s (%s) — %s", rows[0].IncidentID, rows[0].ProductCode, rows[0].Severity)
+		labels, _ := s.DB.ProductLabelMap(ctx)
+		productName := catalog.ProductDisplayLabelCode(rows[0].ProductCode, labels)
+		return fmt.Sprintf("Sự cố gần nhất: %s (%s) — %s", rows[0].IncidentID, productName, rows[0].Severity)
 	}
-	return "OpsOne: dùng Dashboard hoặc hỏi về trạng thái / sự cố / routing."
+	return chatresolve.AssistantName + " (" + chatresolve.AssistantAlias + "): dùng Dashboard hoặc hỏi về trạng thái / sự cố / routing."
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

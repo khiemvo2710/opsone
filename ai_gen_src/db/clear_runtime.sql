@@ -6,8 +6,15 @@ USE opsone;
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
+TRUNCATE TABLE chat_feedback;
+TRUNCATE TABLE chat_interaction_log;
+TRUNCATE TABLE chat_command_patterns;
+TRUNCATE TABLE chat_few_shot_examples;
+TRUNCATE TABLE chat_voice_corrections;
+TRUNCATE TABLE chat_user_prefs;
 TRUNCATE TABLE chat_messages;
 TRUNCATE TABLE chat_sessions;
+TRUNCATE TABLE chat_intent_stats;
 TRUNCATE TABLE agent_change_log;
 TRUNCATE TABLE maintenance_windows;
 TRUNCATE TABLE recommendations;

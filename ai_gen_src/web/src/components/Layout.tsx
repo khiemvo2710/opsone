@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { ASSISTANT_NAME } from '../utils/assistantIdentity';
 import { HealthBadge } from './HealthBadge';
 import { ChatWidget } from './ChatWidget';
 import { useSSE } from '../hooks/useSSE';
@@ -21,12 +22,12 @@ export function Layout() {
         <div className="app-header__brand">
           <img
             src="/favicon-64.png"
-            alt="ZaloPay"
+            alt={ASSISTANT_NAME}
             className="app-header__logo"
             width={32}
             height={32}
           />
-          <strong>OpsOne</strong>
+          <strong>{ASSISTANT_NAME}</strong>
           <HealthBadge
             status={overallHealth.status}
             label={overallHealth.label}

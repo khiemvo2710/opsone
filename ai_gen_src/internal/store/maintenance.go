@@ -115,15 +115,17 @@ func (db *DB) CancelOverlappingMaintenance(ctx context.Context, product, provide
 	return n, nil
 }
 
-// CancelActiveMaintenanceForSKU cancels in-window scheduled/active maintenance for a scope.
+// CancelActiveMaintenanceForSKU cancels scheduled/active maintenance still in effect for a scope.
+// Uses Go now (not SQL NOW()) so window checks match dashboard §9.0 / MaintenanceInWindow.
 func (db *DB) CancelActiveMaintenanceForSKU(ctx context.Context, product, sku, cancelledBy string) (int64, error) {
+	now := time.Now()
 	const query = `
 		UPDATE maintenance_windows
 		SET status = 'cancelled', cancelled_by = ?, cancelled_at = NOW()
 		WHERE product_code = ? AND sku_code = ?
 		  AND status IN ('scheduled', 'active')
-		  AND starts_at <= NOW() AND ends_at > NOW()`
-	res, err := db.ExecContext(ctx, query, cancelledBy, product, sku)
+		  AND ends_at > ?`
+	res, err := db.ExecContext(ctx, query, cancelledBy, product, sku, now)
 	if err != nil {
 		return 0, fmt.Errorf("cancel maintenance scope: %w", err)
 	}
@@ -162,9 +164,9 @@ func (db *DB) CountActiveMaintenanceForSKU(ctx context.Context, product, sku str
 		SELECT COUNT(*) FROM maintenance_windows
 		WHERE product_code = ? AND sku_code = ?
 		  AND status IN ('scheduled', 'active')
-		  AND ends_at > NOW()`
+		  AND ends_at > ?`
 	var n int64
-	err := db.QueryRowContext(ctx, query, product, sku).Scan(&n)
+	err := db.QueryRowContext(ctx, query, product, sku, time.Now()).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("count active maintenance: %w", err)
 	}

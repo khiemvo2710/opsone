@@ -9,6 +9,12 @@ SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS
+  chat_feedback,
+  chat_interaction_log,
+  chat_command_patterns,
+  chat_few_shot_examples,
+  chat_voice_corrections,
+  chat_user_prefs,
   chat_intent_stats,
   chat_messages,
   chat_sessions,
@@ -436,13 +442,16 @@ CREATE TABLE agent_change_log (
   CONSTRAINT fk_agent_change_rollback FOREIGN KEY (rollback_of_id) REFERENCES agent_change_log(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 13.9 Chat
+-- 13.9 Chat — §7.6.5.3–5 OpsOne.md
 CREATE TABLE chat_intent_stats (
   id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  intent_key      VARCHAR(64)  NOT NULL COMMENT 'maintenance, metrics, routing, ...',
+  intent_key      VARCHAR(64)  NOT NULL COMMENT 'maintenance, metrics, set_maintenance, ...',
   pattern_hash    CHAR(24)     NOT NULL,
   sample_message  VARCHAR(512) NOT NULL,
   hit_count       INT UNSIGNED NOT NULL DEFAULT 1,
+  route_key       VARCHAR(64)  NULL COMMENT '§7.6.5.5 P2 — route thực tế',
+  success_count   INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '§7.6.5.5 P2',
+  fail_count      INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '§7.6.5.5 P2',
   last_seen_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uk_chat_intent_pattern (intent_key, pattern_hash),
@@ -451,10 +460,12 @@ CREATE TABLE chat_intent_stats (
 
 CREATE TABLE chat_sessions (
   id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  session_uuid    CHAR(36)     NULL COMMENT 'UUID client POST /chat',
   user_id         VARCHAR(64)  NOT NULL,
   created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  KEY idx_chat_sessions_user (user_id, updated_at)
+  KEY idx_chat_sessions_user (user_id, updated_at),
+  KEY idx_chat_sessions_uuid (session_uuid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE chat_messages (
@@ -463,9 +474,92 @@ CREATE TABLE chat_messages (
   role            ENUM('user','assistant') NOT NULL,
   content         TEXT         NOT NULL,
   input_source    ENUM('text','voice') NOT NULL DEFAULT 'text',
+  stt_raw         VARCHAR(1024) NULL,
   created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_chat_messages_session (session_id, created_at),
   CONSTRAINT fk_chat_messages_session FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- §7.6.5.5 P1–P2 ✅
+CREATE TABLE chat_interaction_log (
+  id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  session_uuid    CHAR(36)     NOT NULL,
+  user_id         VARCHAR(64)  NULL,
+  user_message    VARCHAR(1024) NOT NULL,
+  message_norm    VARCHAR(1024) NOT NULL,
+  input_source    ENUM('text','voice') NOT NULL DEFAULT 'text',
+  stt_raw         VARCHAR(1024) NULL,
+  route           VARCHAR(64)  NOT NULL,
+  intent_key      VARCHAR(64)  NULL,
+  slots_json      JSON         NULL,
+  tools_called    JSON         NULL,
+  action_result   ENUM('success','error','no_op','wrong_route') NOT NULL DEFAULT 'no_op',
+  reply_preview   VARCHAR(512) NULL,
+  latency_ms      INT UNSIGNED NULL,
+  is_admin        TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_chat_log_session (session_uuid, created_at),
+  KEY idx_chat_log_route (route, action_result, created_at),
+  KEY idx_chat_log_norm (message_norm(120), created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE chat_command_patterns (
+  id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  command_key     VARCHAR(64)  NOT NULL,
+  pattern_type    ENUM('regex','keywords') NOT NULL DEFAULT 'keywords',
+  pattern_def     JSON         NOT NULL,
+  default_slots   JSON         NULL,
+  hit_count       INT UNSIGNED NOT NULL DEFAULT 0,
+  success_count   INT UNSIGNED NOT NULL DEFAULT 0,
+  fail_count      INT UNSIGNED NOT NULL DEFAULT 0,
+  status          ENUM('candidate','approved','deprecated') NOT NULL DEFAULT 'candidate',
+  min_role        ENUM('ops','admin') NOT NULL DEFAULT 'ops',
+  approved_by     VARCHAR(64)  NULL,
+  approved_at     DATETIME     NULL,
+  created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_cmd_pattern (command_key, status, hit_count DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE chat_feedback (
+  id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  interaction_id  BIGINT UNSIGNED NOT NULL,
+  rating          ENUM('up','down','corrected') NOT NULL,
+  user_correction VARCHAR(1024) NULL,
+  expected_command VARCHAR(64) NULL,
+  created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_feedback_interaction (interaction_id),
+  CONSTRAINT fk_chat_feedback_log FOREIGN KEY (interaction_id) REFERENCES chat_interaction_log(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE chat_few_shot_examples (
+  id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  command_key     VARCHAR(64)  NOT NULL,
+  user_example    VARCHAR(512) NOT NULL,
+  assistant_example VARCHAR(1024) NOT NULL,
+  success_rate    DECIMAL(5,2) NULL,
+  priority        INT          NOT NULL DEFAULT 0,
+  status          ENUM('candidate','approved','deprecated') NOT NULL DEFAULT 'candidate',
+  created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_few_shot (command_key, status, priority DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE chat_voice_corrections (
+  id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  heard_norm      VARCHAR(512) NOT NULL,
+  corrected_norm  VARCHAR(512) NOT NULL,
+  hit_count       INT UNSIGNED NOT NULL DEFAULT 1,
+  last_seen_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_voice_correction (heard_norm(120), corrected_norm(120)),
+  KEY idx_voice_hits (hit_count DESC, last_seen_at DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE chat_user_prefs (
+  user_id         VARCHAR(64)  NOT NULL PRIMARY KEY,
+  display_name    VARCHAR(64)  NULL,
+  honorific       VARCHAR(16)  NULL,
+  preferred_brevity ENUM('short','normal') NOT NULL DEFAULT 'normal',
+  favorite_products JSON       NULL,
+  updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 13.9.1 Users

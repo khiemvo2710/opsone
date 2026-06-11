@@ -8,7 +8,7 @@ import (
 )
 
 // BumpChatIntentStat records or increments a FAQ pattern hit (indexed by intent + hash).
-func (db *DB) BumpChatIntentStat(ctx context.Context, intentKey, sampleMessage string) error {
+func (db *DB) BumpChatIntentStat(ctx context.Context, intentKey, sampleMessage, routeKey, actionResult string) error {
 	intentKey = strings.TrimSpace(intentKey)
 	if intentKey == "" || intentKey == "unknown" {
 		return nil
@@ -22,14 +22,32 @@ func (db *DB) BumpChatIntentStat(ctx context.Context, intentKey, sampleMessage s
 	if len(sample) > 480 {
 		sample = sample[:480]
 	}
+	routeKey = strings.TrimSpace(routeKey)
+	successInc := 0
+	failInc := 0
+	switch actionResult {
+	case "success":
+		successInc = 1
+	case "error", "wrong_route":
+		failInc = 1
+	}
 	const query = `
-		INSERT INTO chat_intent_stats (intent_key, pattern_hash, sample_message, hit_count, last_seen_at)
-		VALUES (?, ?, ?, 1, NOW())
+		INSERT INTO chat_intent_stats (
+			intent_key, pattern_hash, sample_message, hit_count, route_key,
+			success_count, fail_count, last_seen_at
+		)
+		VALUES (?, ?, ?, 1, ?, ?, ?, NOW())
 		ON DUPLICATE KEY UPDATE
 			hit_count = hit_count + 1,
 			last_seen_at = NOW(),
+			route_key = IF(VALUES(route_key) != '', VALUES(route_key), route_key),
+			success_count = success_count + ?,
+			fail_count = fail_count + ?,
 			sample_message = IF(CHAR_LENGTH(?) > CHAR_LENGTH(sample_message), ?, sample_message)`
-	_, err := db.ExecContext(ctx, query, intentKey, hash, sample, sample, sample)
+	_, err := db.ExecContext(ctx, query,
+		intentKey, hash, sample, routeKey, successInc, failInc,
+		successInc, failInc, sample, sample,
+	)
 	return err
 }
 
