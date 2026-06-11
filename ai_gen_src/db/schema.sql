@@ -1,9 +1,9 @@
 -- OpsOne schema — §13 OpsOne.md
 -- Engine: InnoDB · Charset: utf8mb4
--- Chạy sau khi database traffic_agent đã tồn tại (docker-compose / make db-up).
+-- Chạy sau khi database opsone đã tồn tại (docker-compose / make db-up).
 -- DROP + CREATE: an toàn chạy lại khi đổi DDL — dùng Invoke-OpsOneReset (không dùng file patch riêng).
 
-USE traffic_agent;
+USE opsone;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;

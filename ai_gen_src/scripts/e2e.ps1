@@ -42,5 +42,5 @@ if ($Full) {
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "=== DoD smoke ===" -ForegroundColor Cyan
-docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret traffic_agent -e "SELECT COUNT(*) AS products FROM products;"
+docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret opsone -e "SELECT COUNT(*) AS products FROM products;"
 Write-Host "E2E Phase 7 OK" -ForegroundColor Green

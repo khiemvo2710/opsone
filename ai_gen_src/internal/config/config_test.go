@@ -2,6 +2,14 @@ package config
 
 import "testing"
 
+func TestSanitizeMySQLDSN(t *testing.T) {
+	in := "user:pass@tcp(host:3306)/opsone?parseTime=true&allowPublicKeyRetrieval=true&charset=utf8mb4"
+	want := "user:pass@tcp(host:3306)/opsone?parseTime=true&charset=utf8mb4"
+	if got := sanitizeMySQLDSN(in); got != want {
+		t.Fatalf("sanitizeMySQLDSN() = %q, want %q", got, want)
+	}
+}
+
 func TestNormalizeLLMModel(t *testing.T) {
 	tests := []struct {
 		in, want string

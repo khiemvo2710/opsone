@@ -19,6 +19,13 @@ export function Layout() {
     <div className="app-shell">
       <header className="app-header">
         <div className="app-header__brand">
+          <img
+            src="/favicon-64.png"
+            alt="ZaloPay"
+            className="app-header__logo"
+            width={32}
+            height={32}
+          />
           <strong>OpsOne</strong>
           <HealthBadge
             status={overallHealth.status}

@@ -4,7 +4,7 @@ MYSQL_HOST ?= localhost
 MYSQL_PORT ?= 3306
 MYSQL_USER ?= app
 MYSQL_PASS ?= secret
-MYSQL_DB   ?= traffic_agent
+MYSQL_DB   ?= opsone
 MYSQL_ROOT_PASS ?= rootsecret
 
 MYSQL_CLIENT = docker exec -i opsone-mysql mysql --default-character-set=utf8mb4 -u$(MYSQL_USER) -p$(MYSQL_PASS)

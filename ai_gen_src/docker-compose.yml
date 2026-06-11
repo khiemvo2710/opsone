@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: rootsecret
-      MYSQL_DATABASE: traffic_agent
+      MYSQL_DATABASE: opsone
       MYSQL_USER: app
       MYSQL_PASSWORD: secret
       TZ: Asia/Ho_Chi_Minh

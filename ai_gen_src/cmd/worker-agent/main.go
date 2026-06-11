@@ -6,19 +6,26 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"opsone/internal/agent"
 	"opsone/internal/config"
+	"opsone/internal/healthserver"
 	"opsone/internal/store"
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	healthserver.ListenAndServe(ctx, "")
+
 	cfg := config.Load()
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
 
-	db, err := store.Open(cfg.MySQLDSN)
+	db, err := store.OpenWithRetry(ctx, cfg.MySQLDSN, 2*time.Minute)
 	if err != nil {
 		log.Fatalf("mysql: %v", err)
 	}
@@ -31,9 +38,6 @@ func main() {
 
 	interval := agent.IntervalFromSettings(settings)
 	log.Printf("OpsOne worker-agent (core) starting interval=%s data_source=%s", interval, settings.DataSource)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	runner := agent.NewRunner(db)
 	if err := runner.RunBlocking(ctx, interval); err != nil && err != context.Canceled {

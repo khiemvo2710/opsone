@@ -44,7 +44,7 @@ func Load() Config {
 	loadDotEnv(".env")
 	tz := envOr("APP_TIMEZONE", DefaultTimezone)
 	return Config{
-		MySQLDSN:         ensureDSNTimezone(envOr("MYSQL_DSN", defaultMySQLDSN(tz)), tz),
+		MySQLDSN:         ensureDSNTimezone(sanitizeMySQLDSN(envOr("MYSQL_DSN", defaultMySQLDSN(tz))), tz),
 		DataSource:       envOr("DATA_SOURCE", "mock"),
 		APIAddr:          envOr("API_ADDR", ":8080"),
 		CORSOrigin:       envOr("CORS_ORIGIN", "http://localhost:5173"),
@@ -144,7 +144,31 @@ func (c Config) LogLLMStartup() {
 }
 
 func defaultMySQLDSN(tz string) string {
-	return "app:secret@tcp(localhost:3306)/traffic_agent?parseTime=true&charset=utf8mb4&loc=" + url.QueryEscape(tz)
+	return "app:secret@tcp(localhost:3306)/opsone?parseTime=true&charset=utf8mb4&loc=" + url.QueryEscape(tz)
+}
+
+// sanitizeMySQLDSN strips JDBC-only query params that break github.com/go-sql-driver/mysql.
+// allowPublicKeyRetrieval is valid in DBeaver/JDBC but causes MySQL error 1193 in Go.
+func sanitizeMySQLDSN(dsn string) string {
+	for _, bad := range []string{
+		"&allowPublicKeyRetrieval=true",
+		"&allowPublicKeyRetrieval=false",
+		"allowPublicKeyRetrieval=true&",
+		"allowPublicKeyRetrieval=false&",
+		"?allowPublicKeyRetrieval=true&",
+		"?allowPublicKeyRetrieval=false&",
+		"?allowPublicKeyRetrieval=true",
+		"?allowPublicKeyRetrieval=false",
+	} {
+		dsn = strings.ReplaceAll(dsn, bad, "")
+	}
+	if strings.HasSuffix(dsn, "&") {
+		dsn = strings.TrimSuffix(dsn, "&")
+	}
+	if strings.HasSuffix(dsn, "?") {
+		dsn = strings.TrimSuffix(dsn, "?")
+	}
+	return dsn
 }
 
 // ensureDSNTimezone appends loc= if MYSQL_DSN omits it (prevents UTC storage vs local clock).

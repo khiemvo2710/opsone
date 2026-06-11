@@ -1,14 +1,41 @@
 #!/usr/bin/env bash
-# Deploy OpsOne API to GreenNode AgentBase (PUBLIC). Run from ai_gen_src via Git Bash.
+# Deploy OpsOne to GreenNode AgentBase (PUBLIC). TARGET=api|worker-mock|worker-agent|web
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
 SKILLS="$REPO/.claude/skills/agentbase"
-RUNTIME_NAME="${RUNTIME_NAME:-opsone-api}"
+TARGET="${TARGET:-api}"
 FLAVOR="${FLAVOR:-runtime-s2-general-2x4}"
 ENV_FILE="${ENV_FILE:-$ROOT/.env.greennode}"
+API_ENDPOINT="${API_ENDPOINT:-}"
 TAG="v$(date +%Y%m%d%H%M%S)"
+BUILD_DIR="$ROOT"
+BUILD_ARGS=()
+
+case "$TARGET" in
+  api)
+    DOCKERFILE="Dockerfile"
+    RUNTIME_NAME="${RUNTIME_NAME:-opsone-api}"
+    ;;
+  worker-mock)
+    DOCKERFILE="Dockerfile.worker-mock"
+    RUNTIME_NAME="${RUNTIME_NAME:-opsone-worker-mock}"
+    ;;
+  worker-agent)
+    DOCKERFILE="Dockerfile.worker-agent"
+    RUNTIME_NAME="${RUNTIME_NAME:-opsone-worker-agent}"
+    ;;
+  web)
+    DOCKERFILE="Dockerfile"
+    BUILD_DIR="$ROOT/web"
+    RUNTIME_NAME="${RUNTIME_NAME:-opsone-web}"
+    ;;
+  *)
+    echo "TARGET must be api, worker-mock, worker-agent, or web" >&2
+    exit 1
+    ;;
+esac
 
 cd "$REPO"
 set -a
@@ -27,8 +54,22 @@ fi
 IMAGE="${REGISTRY}/${REPO_NAME}/${RUNTIME_NAME}:${TAG}"
 echo "Image: $IMAGE"
 
-cd "$ROOT"
-docker build --platform linux/amd64 -t "$IMAGE" .
+if [ "$TARGET" = "web" ]; then
+  if [ -z "$API_ENDPOINT" ]; then
+    API_RT=$(bash "$SKILLS/scripts/runtime.sh" list | jq -r '.listData[]? | select(.name=="opsone-api" and .status=="ACTIVE") | .id' | head -1)
+    if [ -z "$API_RT" ]; then
+      echo "opsone-api not ACTIVE. Deploy api first or set API_ENDPOINT." >&2
+      exit 1
+    fi
+    API_ENDPOINT=$(bash "$SKILLS/scripts/runtime.sh" endpoints list "$API_RT" | jq -r '.listData[]? | select(.name=="DEFAULT") | .url' | head -1)
+  fi
+  API_BASE="${API_ENDPOINT%/}/api/v1"
+  echo "Web will call API at: $API_BASE"
+  BUILD_ARGS+=(--build-arg "VITE_API_BASE_URL=$API_BASE" --build-arg "VITE_DEV_AUTH_BYPASS=true")
+fi
+
+cd "$BUILD_DIR"
+docker build -f "$DOCKERFILE" --platform linux/amd64 -t "$IMAGE" "${BUILD_ARGS[@]}" .
 
 bash "$SKILLS/scripts/cr.sh" credentials docker-login
 docker push "$IMAGE"
@@ -36,7 +77,7 @@ docker push "$IMAGE"
 cd "$REPO"
 EXISTING=$(bash "$SKILLS/scripts/runtime.sh" list | jq -r --arg n "$RUNTIME_NAME" '.listData[]? | select(.name==$n) | .id' | head -1)
 ENV_ARGS=()
-if [ -f "$ENV_FILE" ]; then
+if [ "$TARGET" != "web" ] && [ -f "$ENV_FILE" ]; then
   ENV_ARGS=(--env-file "$ENV_FILE")
 fi
 

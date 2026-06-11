@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_API_BASE_URL: string;
   readonly VITE_DEV_AUTH_BYPASS: string;
   readonly VITE_AAD_TENANT_ID: string;
   readonly VITE_AAD_WEB_CLIENT_ID: string;

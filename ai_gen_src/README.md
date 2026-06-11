@@ -50,7 +50,10 @@ Monorepo Go + MySQL cho **OpsOne** — spec: `../OpsOne.md`
 - **`ScopeAutoEditor`** — chế độ BT/routing cấp dịch vụ + SKU; compact + ⋯; **Lưu** riêng (`PUT /scopes/.../auto`, không dùng Lưu hàng Ngưỡng); `patchOverviewCache` + refetch; ẩn hàng đề xuất khi `ShouldAutoApplyScope` (`utils/scopeAuto.ts`, `ResolveEffectiveScopeAuto`)
 - **Mở lại** provider — hàng *Mở lại provider*: **Trả lại** → baseline; **Lưu** → `restore-baseline` (baseline) hoặc `routing/apply` (tùy chỉnh)
 - **Mở lại dịch vụ** — `POST .../maintenance/reopen-service` (atomic baseline + grace)
-- Chat widget — panel ~800×780px; nhãn **Bạn/OpsOne**; kéo dock 4 góc (`useChatDock`); voice `vi-VN`; LLM + alias dịch vụ §7.6.5; Admin duyệt qua chat khi yêu cầu rõ
+- **`Layout`** — logo ZaloPay header + favicon tab (`web/public/favicon.png`)
+- Chat widget — panel ~800×780px; nhãn **Bạn/OpsOne**; kéo dock 4 góc (`useChatDock`); resize 4 góc (`useChatResize`); auto-focus ô nhập khi mở
+- Voice `vi-VN` (`useVoiceInput`) — im lặng **2s** → tự gửi chat; xóa ô nhập sau gửi
+- LLM + alias dịch vụ §7.6.5; Admin duyệt qua chat khi yêu cầu rõ
 - SSE `/events` + poll 60s fallback
 - Dev: `VITE_DEV_AUTH_BYPASS=true` (header `X-OpsOne-Role`); production: MSAL.js §2.6.4
 
@@ -123,6 +126,17 @@ npm install
 npm run dev
 ```
 
+### Deploy GreenNode AgentBase (4 runtimes)
+
+```powershell
+# IAM: opsone/.env  |  Container: ai_gen_src/.env.greennode
+cd ai_gen_src
+.\scripts\deploy-greennode-all.ps1
+# Dashboard: endpoint opsone-web | API: endpoint opsone-api
+```
+
+Chi tiết §15.2.2 trong `OpsOne.md` (MYSQL_DSN, không `allowPublicKeyRetrieval` trong Go, `VITE_API_BASE_URL` khi build web).
+
 ## Cấu trúc (rút gọn)
 
 ```text
@@ -130,7 +144,8 @@ ai_gen_src/
 ├── cmd/api, worker-mock, worker-agent
 ├── internal/agent, api, chatresolve, llm, store, tools, …
 ├── db/schema.sql, seed.sql
-├── scripts/run-api.ps1, dev.ps1
+├── Dockerfile, Dockerfile.worker-*
+├── scripts/run-api.ps1, dev.ps1, deploy-greennode*.ps1
 └── web/src/
     ├── components/   # ServiceOverviewTable, ScopeAutoEditor, ProductThresholdEditor, …
     ├── hooks/        # useChatDock, useSSE, useVoiceInput, useOverallHealth, useMaintenanceDefaultDurationMin
@@ -138,4 +153,4 @@ ai_gen_src/
     └── pages/        # Dashboard, IncidentsPage, Settings, …
 ```
 
-Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §7.6.5 Chat LLM, §9.0 Dashboard, §9.5 Cấu hình (compact), §9.5.2 Chế độ BT / Routing, §9.5.5 Thời lượng BT mặc định.
+Spec đầy đủ: [`../OpsOne.md`](../OpsOne.md) — §7.6.5 Chat LLM, §9 Chat/Voice, §9.0 Dashboard, §15.2.2 GreenNode deploy, §9.5 Cấu hình, §9.5.2 Chế độ BT / Routing.

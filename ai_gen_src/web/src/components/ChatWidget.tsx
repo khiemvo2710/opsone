@@ -29,10 +29,6 @@ export function ChatWidget() {
     feed.scrollTop = feed.scrollHeight;
   }, []);
 
-  const voice = useVoiceInput((text) => {
-    setInput(text);
-  });
-
   const send = useMutation({
     mutationFn: (message: string) =>
       api<{ reply: string }>('/chat', {
@@ -58,14 +54,25 @@ export function ChatWidget() {
     requestAnimationFrame(() => scrollFeedToBottom());
   }, [messages, send.isPending, open, scrollFeedToBottom]);
 
+  const voice = useVoiceInput({
+    onTranscript: setInput,
+    onSubmit: (raw) => {
+      const msg = raw.trim();
+      if (!msg || send.isPending) return;
+      setMessages((prev) => [...prev, { role: 'user', text: msg }]);
+      setInput('');
+      send.mutate(msg);
+    },
+  });
+
   const submitMessage = useCallback(() => {
-    const msg = (voice.state === 'listening' ? voice.transcript : input).trim();
+    const msg = input.trim();
     if (!msg || send.isPending) return;
     setMessages((prev) => [...prev, { role: 'user', text: msg }]);
     setInput('');
     voice.setTranscript('');
     send.mutate(msg);
-  }, [input, send, voice]);
+  }, [input, send.isPending, send, voice]);
 
   const onInputKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -173,7 +180,7 @@ export function ChatWidget() {
           <div className="chat-widget__input">
             <textarea
               ref={inputRef}
-              value={voice.state === 'listening' ? voice.transcript : input}
+              value={input}
               onChange={(e) => {
                 voice.setTranscript(e.target.value);
                 setInput(e.target.value);
@@ -187,7 +194,8 @@ export function ChatWidget() {
                 <button
                   type="button"
                   className={`btn btn--mic${voice.state === 'listening' ? ' btn--mic-active' : ''}`}
-                  aria-label="Micro"
+                  aria-label="Micro — nói xong, im lặng 2 giây để tự gửi"
+                  title="Nói lệnh; im lặng 2 giây sẽ tự gửi"
                   onClick={voice.start}
                 >
                   Mic
@@ -203,8 +211,8 @@ export function ChatWidget() {
               </button>
             </div>
           </div>
-          {voice.state === 'listening' && (
-            <p className="voice-hint chat-widget__voice">Đang nghe... nói tiếng Việt</p>
+          {voice.supported && voice.state === 'listening' && (
+            <p className="voice-hint chat-widget__voice">Đang nghe… ngừng nói 2 giây sẽ tự gửi.</p>
           )}
         </div>
       ) : (

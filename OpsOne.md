@@ -345,9 +345,9 @@ Load product_alert_thresholds
 ```text
 User mở UI (PC / mobile)
     ↓
-Chat text  hoặc  Nhấn micro → nói lệnh
-    ↓
-Speech-to-text (nếu voice) → cùng endpoint Agent chat
+Chat text  hoặc  Nhấn micro → nói lệnh → im lặng 2s
+              ↓
+Speech-to-text (nếu voice) → cùng endpoint Agent chat (`POST /chat`)
     ↓
 Agent trả lời / gọi tool on-demand (VD: giải thích incident, xem routing)
     ↓
@@ -374,7 +374,7 @@ Hiển thị trong khung chat + cập nhật panel Incident / Routing Plan
 **Biến môi trường (`.env`):**
 
 ```bash
-MYSQL_DSN=app:secret@tcp(localhost:3306)/traffic_agent?parseTime=true
+MYSQL_DSN=app:secret@tcp(localhost:3306)/opsone?parseTime=true&charset=utf8mb4&loc=Asia%2FHo_Chi_Minh
 DATA_SOURCE=mock                    # mock | production
 LLM_API_URL=                        # optional; mặc định GreenNode AIP §7.6.7
 LLM_API_KEY=                        # bật chat LLM khi set (alias AIP_API_KEY)
@@ -481,14 +481,25 @@ opsone/
 │   ├── health/              # health_status green/yellow/red §8.2
 │   ├── api/                 # REST + SSE §2.3; chat agent §7.6.5 — chat_agent.go, chat_actions.go, …
 │   ├── chatresolve/         # Alias dịch vụ/provider cho chat §7.6.5 (`topup mobi` → TOPUP_MOBI)
+│   ├── healthserver/        # GET /health :8080 — probe AgentBase trước khi nối MySQL (api/workers)
 │   └── llm/                 # OpenAI-compatible MaaS client §7.6.7 (GreenNode AIP)
+├── Dockerfile               # api — GreenNode AgentBase
+├── Dockerfile.worker-mock
+├── Dockerfile.worker-agent
 ├── db/
 │   ├── schema.sql           # copy từ §13
 │   └── seed.sql             # UTF-8 — nhãn tiếng Việt (Thẻ, đ); xem §13.11
 ├── scripts/
 │   ├── dev.ps1              # Invoke-OpsOneReset, Start-OpsOneAPI/Web, … (Windows)
-│   └── run-api.ps1          # nạp `.env`, giải phóng port `API_ADDR`, `go run ./cmd/api`
+│   ├── run-api.ps1          # nạp `.env`, giải phóng port `API_ADDR`, `go run ./cmd/api`
+│   ├── prepare-greennode-env.ps1
+│   ├── deploy-greennode.ps1   # TARGET: api | worker-mock | worker-agent | web
+│   └── deploy-greennode-all.ps1
+├── .env.greennode           # env container runtime (MYSQL_DSN, LLM_*, …) — không commit secret
 ├── web/                     # React app (Phase 6 ✅)
+│   ├── Dockerfile           # nginx :8080 — GreenNode `opsone-web`
+│   ├── nginx.conf
+│   ├── public/              # favicon ZaloPay (favicon.png, apple-touch-icon.png)
 │   ├── dev.ps1              # npm run dev — fix PATH Node trên Windows
 │   ├── src/
 │   │   ├── api/client.ts    # fetch + DEV_AUTH_BYPASS / MSAL
@@ -499,7 +510,7 @@ opsone/
 │   │   │   ├── Settings.tsx        # §9.5 scheduler + bảo trì mặc định + mock (compact card; ngưỡng/auto trên Dashboard)
 │   │   │   └── MaintenancePage.tsx
 │   │   ├── components/
-│   │   │   ├── Layout.tsx              # top-nav tabs + SSE + ChatWidget
+│   │   │   ├── Layout.tsx              # top-nav + logo ZaloPay + OpsOne + SSE + ChatWidget
 │   │   │   ├── ChatWidget.tsx          # chat nổi — kéo dock 4 góc (useChatDock)
 │   │   │   ├── HealthBadge.tsx         # 🟢🟡🔴 (+ compact icon-only)
 │   │   │   ├── ServiceOverviewTable.tsx # routing + bảo trì + cột provider (6 chỉ số) + hàng plan con + ngưỡng đầu nhóm
@@ -527,7 +538,7 @@ opsone/
 │   │       ├── useSSE.ts               # /events + poll fallback
 │   │       ├── useOverallHealth.ts     # header/logo badge 🟢🟡🔴
 │   │       ├── useProductThresholds.ts # cache GET /products/{code}/thresholds
-│   │       └── useVoiceInput.ts        # Web Speech vi-VN
+│   │       └── useVoiceInput.ts        # Web Speech vi-VN; im lặng 2s → tự gửi chat
 │   └── package.json
 ├── docker-compose.yml       # mysql (+ TZ Asia/Ho_Chi_Minh)
 └── Makefile                 # migrate, seed, run-all
@@ -807,6 +818,7 @@ Query: `page` (1-based, mặc định 1), `page_size` (mặc định 10, max 50)
 
 | Biến env (React `web/.env`) | Mặc định dev | Mô tả |
 | --------------------------- | ------------ | ----- |
+| `VITE_API_BASE_URL` | (trống) | Local: proxy `/api` → `:8080`. GreenNode web image: `https://<opsone-api>/api/v1` (build-arg) |
 | `VITE_DEV_AUTH_BYPASS` | `true` | Gửi header admin tới API |
 | `VITE_AAD_*` | (trống) | Bật MSAL khi có tenant/client (§2.6.4) |
 
@@ -845,8 +857,8 @@ Query: `page` (1-based, mặc định 1), `page_size` (mặc định 10, max 50)
 **Makefile gợi ý:**
 
 ```makefile
-migrate:  mysql -u root -p traffic_agent < db/schema.sql
-seed:     mysql -u root -p traffic_agent < db/seed.sql
+migrate:  mysql -u root -p opsone < db/schema.sql
+seed:     mysql -u root -p opsone < db/seed.sql
 run-api:  pwsh -File scripts/run-api.ps1   # Windows: nạp .env + kill port trước khi start
 run-mock: go run ./cmd/worker-mock
 run-agent: go run ./cmd/worker-agent
@@ -3709,9 +3721,9 @@ Khi nhóm SKU cùng `product_code` (`routing_mode=sku`, ≥2 dòng SKU) — ô *
 
 **Phân trang:** Mặc định **10 dòng/trang**; nút **Trước / Sau**; hiển thị *Trang X/Y · N sự cố*; query key `['incidents', page, pageSize]`; refresh **60s** + SSE invalidate.
 
-**Navigation (`Layout.tsx`):** Menu **tab ngang trên header** — Dashboard · Bảo trì · Lịch sử · Cấu hình (không còn sidebar trái). Badge 🟢🟡🔴 global cạnh logo OpsOne.
+**Navigation (`Layout.tsx`):** Menu **tab ngang trên header** — Dashboard · Sự cố · Bảo trì · Cấu hình (không còn sidebar trái). **Logo ZaloPay** (32×32) cạnh chữ **OpsOne**; badge 🟢🟡🔴 global cạnh brand. **Favicon** tab trình duyệt: `web/public/favicon.png` (logo ZaloPay).
 
-**Chat (`ChatWidget.tsx` + `useChatDock.ts`):** Widget nổi panel **~800×780px** (mobile ~full width / 88vh); nhãn bubble **Bạn / OpsOne**; phản hồi AI full-width, `pre-wrap`; **một vùng scroll** trên feed (không scrollbar lồng trong bubble). **Kéo** nút Chat hoặc header để **dock** 4 góc; vị trí `localStorage` (`opsone-chat-corner`). **Enter** gửi, **Shift+Enter** xuống dòng; voice `vi-VN`. Không route `/chat` riêng.
+**Chat (`ChatWidget.tsx` + `useChatDock.ts`):** Widget nổi panel **~800×780px** (mobile ~full width / 88vh); nhãn bubble **Bạn / OpsOne**; phản hồi AI full-width, `pre-wrap`; **một vùng scroll** trên feed (không scrollbar lồng trong bubble). **Kéo** nút Chat hoặc header để **dock** 4 góc; vị trí `localStorage` (`opsone-chat-corner`). **Enter** gửi, **Shift+Enter** xuống dòng; **sau gửi xóa ô nhập**. Voice `vi-VN` qua `useVoiceInput`: **im lặng 2 giây** sau lời nói cuối → tự gửi (không cần từ kết thúc); khi đang nghe hiện gợi ý *Đang nghe… ngừng nói 2 giây sẽ tự gửi.* Không route `/chat` riêng.
 
 UI là **mặt tiếp xúc với người vận hành** — dùng được trên **điện thoại** và **PC**, nhận lệnh qua **chat** hoặc **micro**.
 
@@ -3746,15 +3758,16 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
 **Voice (micro):**
 
 ```text
-[Nút micro]  →  Thu âm  →  Speech-to-Text  →  Gửi text vào Agent
+[Nút micro]  →  Thu âm (continuous)  →  Speech-to-Text vi-VN  →  Im lặng 2s  →  Tự gửi /chat
               "Cho tôi biết ESALE ZING hôm nay thế nào"
-              "Tại sao fail tăng mệnh giá hai mươi nghìn"
+              (ngừng nói 2 giây → gửi, không cần bấm Gửi)
 ```
 
 **Yêu cầu voice:**
 
 - Nút micro rõ ràng (trạng thái: idle / đang nghe / đang xử lý).
-- Hiển thị **bản ghi nhận dạng giọng** trước khi gửi (user sửa được nếu STT sai).
+- Hiển thị **bản ghi nhận dạng giọng** trong ô nhập khi đang nghe; user sửa được nếu STT sai trước khi im lặng đủ 2s.
+- **Tự gửi:** `VOICE_SILENCE_MS = 2000` — reset timer mỗi lần STT cập nhật; hết 2s không có lời mới → gọi cùng luồng `POST /chat` như nút Gửi; xóa ô nhập sau gửi.
 - Fallback: trình duyệt không hỗ trợ STT → ẩn micro, chỉ dùng chat.
 - Ngôn ngữ: **tiếng Việt bắt buộc** (§2.5); STT Web Speech API `vi-VN`.
 
@@ -3764,7 +3777,7 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│ OpsOne  🟡 Hệ thống   [Dashboard][Bảo trì][Lịch sử][Cấu hình] │
+│ [ZP] OpsOne  🟡 Hệ thống   [Dashboard][Sự cố][Bảo trì][Cấu hình] │
 ├──────────────────────────────────────────────────────────────┤
 │  Dashboard — bảng routing (group SKU) + incidents            │
 │                                                              │
@@ -4381,7 +4394,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 
 1. UI feed hiển thị card Sự cố mức Cao — tap mở chi tiết.
 2. **Chat:** gõ *"Tình hình topup mobi?"* → alias `TOPUP_MOBI` §7.6.5 → `get_routing` + `get_metrics` (cả 3 provider) → tóm tắt tiếng Việt. Hoặc *"Tại sao ESALE 20k fail tăng?"* → `get_metrics` + `get_top_errors`.
-3. **Voice:** nhấn micro, nói *"Đề xuất routing cho mệnh giá hai mươi nghìn"* → STT → cùng câu hỏi qua `/chat` → Agent trả Routing Plan.
+3. **Voice:** nhấn micro, nói *"Đề xuất routing cho mệnh giá hai mươi nghìn"* → STT → im lặng 2s → tự gửi `/chat` → Agent trả Routing Plan.
 4. Trên **desktop** cùng tài khoản: Dashboard §9.0 — bảng routing (hàng con *Kế hoạch routing* dưới SKU) + bảng incidents + `ChatWidget` góc phải dưới (cùng dữ liệu).
 5. (Tuỳ chọn) Ops bấm **Duyệt** trên hàng kế hoạch (cột Bảo trì, căn phải) → UpdateRouting thực thi.
 6. (Tuỳ chọn, **Admin**) Chat: *"Liệt kê việc chờ duyệt"* → *"Duyệt routing TOPUP_VINA"* — agent gọi `list_pending_actions` + tool duyệt §7.6.5 (cần `LLM_API_KEY` + role Admin).
@@ -5797,7 +5810,7 @@ export const TOOLS_OPENAI = [
                   └────────────────────────────────────────┘
 ```
 
-### 15.2 Hai đường deploy chính
+### 15.2 Ba đường deploy chính
 
 #### 15.2.1 Option A — Self-hosted (Docker Compose / VPS / On-prem)
 
@@ -5959,7 +5972,53 @@ docker compose up -d --build
 docker compose logs -f api worker-agent
 ```
 
-#### 15.2.2 Option B — Managed cloud (Vercel + Railway + Aiven)
+#### 15.2.2 Option B — GreenNode AgentBase (VNG Cloud) ✅ triển khai hiện tại
+
+**4 Custom Agent runtimes** (PUBLIC), mỗi runtime = 1 Docker image + flavor (`runtime-s2-general-2x4`):
+
+| Runtime | Image | Mô tả | URL người dùng |
+|---------|-------|--------|----------------|
+| `opsone-api` | `Dockerfile` | REST + SSE + chat LLM `:8080` | DEFAULT endpoint — API backend |
+| `opsone-worker-mock` | `Dockerfile.worker-mock` | Mock tick 1 phút | Chỉ `GET /health` |
+| `opsone-worker-agent` | `Dockerfile.worker-agent` | Scheduler 5 phút | Chỉ `GET /health` |
+| `opsone-web` | `web/Dockerfile` | React SPA (nginx `:8080`) | DEFAULT endpoint — **mở dashboard** |
+
+**Hai lớp env (bắt buộc tách):**
+
+| File | Mục đích |
+|------|----------|
+| `opsone/.env` (repo root) | `GREENNODE_CLIENT_ID` / `GREENNODE_CLIENT_SECRET` — IAM deploy từ máy dev |
+| `ai_gen_src/.env.greennode` | Env **trong container** api/workers: `MYSQL_DSN`, `LLM_*`, `CORS_ORIGIN=*`, `DEV_AUTH_BYPASS=true`, … |
+
+> **MySQL:** GreenNode **không** cấp DB. Dùng vDB MySQL (public endpoint) hoặc MySQL khác reachable từ runtime PUBLIC.  
+> **`MYSQL_DSN` (Go):** **không** thêm `allowPublicKeyRetrieval=true` (chỉ dùng cho DBeaver/JDBC — Go driver lỗi 1193). `config.sanitizeMySQLDSN` tự strip nếu copy nhầm.  
+> Runtime tự inject `GREENNODE_CLIENT_ID`, `GREENNODE_AGENT_IDENTITY`, … — **không** ghi trong `.env.greennode`.
+
+**Deploy (PowerShell, từ `ai_gen_src`):**
+
+```powershell
+copy ..\.env.example ..\.env                    # IAM
+copy .env.greennode.example .env.greennode      # MYSQL_DSN + LLM
+.\scripts\prepare-greennode-env.ps1             # tuỳ chọn: từ .env local
+
+.\scripts\deploy-greennode.ps1 -Target api
+.\scripts\deploy-greennode.ps1 -Target worker-mock
+.\scripts\deploy-greennode.ps1 -Target worker-agent
+.\scripts\deploy-greennode.ps1 -Target web      # cần opsone-api ACTIVE; auto lấy API endpoint
+
+# hoặc một lệnh:
+.\scripts\deploy-greennode-all.ps1
+```
+
+**Web build:** `VITE_API_BASE_URL=https://<opsone-api-endpoint>/api/v1` (build-arg lúc `docker build`); `VITE_DEV_AUTH_BYPASS=true` trên GreenNode demo. Local dev: proxy Vite `/api` → `localhost:8080` (để trống `VITE_API_BASE_URL`).
+
+**Health:** mọi image lắng nghe `:8080`, `GET /health` → `200 {"status":"ok"}`. API/workers: health server trước, `OpenWithRetry` MySQL tối đa 2 phút.
+
+**Console:** [Agent Runtime](https://aiplatform.console.vngcloud.vn/agent-runtime?tab=runtime) · script in `Endpoint:` / `Dashboard:` sau deploy.
+
+**Bash:** `TARGET=api|worker-mock|worker-agent|web bash scripts/deploy-greennode.sh`
+
+#### 15.2.3 Option C — Managed cloud (Vercel + Railway + Aiven)
 
 Cho production rollout nhẹ, không tự quản hạ tầng. **Tách 3 layer ra 3 nhà cung cấp.**
 

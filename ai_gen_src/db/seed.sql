@@ -1,6 +1,6 @@
 -- OpsOne seed — §13.10 OpsOne.md
 -- Encoding: UTF-8 (Thẻ, đ, …). Import bằng Invoke-OpsOneReset → docker cp (không pipe stdin).
-USE traffic_agent;
+USE opsone;
 
 SET NAMES utf8mb4;
 

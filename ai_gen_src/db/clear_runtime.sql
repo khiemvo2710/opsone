@@ -1,7 +1,7 @@
 -- OpsOne: clear runtime/transactional data, keep catalog + routing_config + agent_settings.
 -- Usage: Invoke-OpsOneClearRuntime (Windows) or make clear-runtime
 
-USE traffic_agent;
+USE opsone;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;

@@ -13,7 +13,7 @@ function Wait-OpsOneMysqlReady {
     while ((Get-Date) -lt $deadline) {
         docker compose exec -T mysql mysqladmin ping -h localhost -u root -prootsecret --silent 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
-            docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret traffic_agent -e "SELECT 1" 2>$null | Out-Null
+            docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret opsone -e "SELECT 1" 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "MySQL is ready."
                 return
@@ -37,7 +37,7 @@ function Invoke-OpsOneMysql {
     if ($LASTEXITCODE -ne 0) {
         throw "docker cp failed for $SqlFile"
     }
-    docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret traffic_agent -e "source $containerPath"
+    docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret opsone -e "source $containerPath"
     if ($LASTEXITCODE -ne 0) {
         throw "MySQL failed running $SqlFile (exit $LASTEXITCODE)"
     }
@@ -53,7 +53,7 @@ function Invoke-OpsOneReset {
     Write-Host "Recreating schema (DROP + CREATE from db/schema.sql)..."
     Invoke-OpsOneMysql "db\schema.sql"
     Invoke-OpsOneMysql "db\seed.sql"
-    docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret traffic_agent -e "SELECT product_code, label FROM products WHERE product_code IN ('ZING','GARENA');"
+    docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret opsone -e "SELECT product_code, label FROM products WHERE product_code IN ('ZING','GARENA');"
     if ($LASTEXITCODE -ne 0) {
         throw "Seed verification query failed"
     }

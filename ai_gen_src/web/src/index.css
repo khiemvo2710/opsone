@@ -68,6 +68,16 @@ textarea {
   flex-shrink: 0;
 }
 
+.app-header__logo {
+  display: block;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: contain;
+  background: #fff;
+  flex-shrink: 0;
+}
+
 .top-nav {
   display: flex;
   flex-wrap: wrap;
