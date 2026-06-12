@@ -99,6 +99,7 @@ CREATE TABLE agent_settings (
   mock_retention_hours    SMALLINT UNSIGNED NOT NULL DEFAULT 24,
   maintenance_default_duration_min TINYINT UNSIGNED NOT NULL DEFAULT 60,
   maintenance_auto_enabled TINYINT(1)      NOT NULL DEFAULT 0,
+  smtp_sender           VARCHAR(128)     NOT NULL DEFAULT 'khiem2710@gmail.com',
   notification_enabled  TINYINT(1)       NOT NULL DEFAULT 1,
   notification_recipients JSON             NOT NULL,
   notification_on_red_only TINYINT(1)     NOT NULL DEFAULT 1,

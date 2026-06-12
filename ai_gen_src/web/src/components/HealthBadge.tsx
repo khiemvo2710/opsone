@@ -8,7 +8,7 @@ const ICON: Record<string, string> = {
 
 const LABEL: Record<string, string> = {
   green: 'Hệ thống OK',
-  yellow: 'Đang theo dõi / xử lý',
+  yellow: 'Đang theo dõi',
   red: 'Đang có vấn đề',
 };
 

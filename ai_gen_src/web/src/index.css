@@ -1002,7 +1002,8 @@ textarea {
   cursor: pointer;
 }
 
-.settings-row--select {
+.settings-row--select,
+.settings-row--vertical {
   flex-direction: column;
   align-items: stretch;
   gap: 0.3rem;
@@ -1019,13 +1020,15 @@ textarea {
 }
 
 .settings-input--num,
+.settings-input,
 .settings-select {
-  padding: 0.3rem 0.45rem;
+  padding: 0.35rem 0.5rem;
   border-radius: var(--radius);
   border: 1px solid var(--surface2);
   background: var(--bg);
   color: var(--text);
   font-size: 0.875rem;
+  width: 100%;
 }
 
 .settings-input--num {
@@ -1046,6 +1049,19 @@ textarea {
 
 .settings-page__save {
   margin-top: 0;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+}
+
+.settings-field__label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
 }
 
 /* Legacy field layout (other pages) */

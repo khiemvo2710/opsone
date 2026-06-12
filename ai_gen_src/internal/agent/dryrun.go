@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"opsone/internal/notify"
 	"opsone/internal/store"
 )
 
@@ -15,8 +16,8 @@ type DryRunner struct {
 }
 
 // NewDryRunner creates a dry-run compatible runner.
-func NewDryRunner(db *store.DB) *DryRunner {
-	return &DryRunner{inner: NewRunner(db)}
+func NewDryRunner(db *store.DB, n *notify.Service) *DryRunner {
+	return &DryRunner{inner: NewRunner(db, n)}
 }
 
 // RunOnce executes one agent core cycle.

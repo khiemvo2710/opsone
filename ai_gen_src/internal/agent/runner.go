@@ -9,6 +9,7 @@ import (
 
 	"opsone/internal/catalog"
 	"opsone/internal/domain"
+	"opsone/internal/notify"
 	"opsone/internal/store"
 )
 
@@ -16,11 +17,12 @@ import (
 type Runner struct {
 	DB        *store.DB
 	Collector *Collector
+	Notify    *notify.Service
 }
 
 // NewRunner creates the agent core runner.
-func NewRunner(db *store.DB) *Runner {
-	return &Runner{DB: db, Collector: NewCollector(db)}
+func NewRunner(db *store.DB, n *notify.Service) *Runner {
+	return &Runner{DB: db, Collector: NewCollector(db, n), Notify: n}
 }
 
 // RunOnce executes one agent cycle: collect → persist history/health/state.
@@ -60,7 +62,7 @@ func (r *Runner) RunOnce(ctx context.Context) (CycleContext, error) {
 		return CycleContext{}, err
 	}
 
-	reasoner := NewReasoner(r.DB)
+	reasoner := NewReasoner(r.DB, r.Notify)
 	productCtxs, err = reasoner.Process(ctx, cycleID, productCtxs)
 	if err != nil {
 		_ = r.DB.FailAnalysisCycle(ctx, cycleID, time.Now())
@@ -119,6 +121,41 @@ func (r *Runner) RunOnce(ctx context.Context) (CycleContext, error) {
 		HealthStatus: cycleHealth,
 		Decision:     decision,
 	}
+
+	// Send notifications for breaches
+	go func() {
+		for _, pc := range productCtxs {
+			// Check product-level threshold
+			th, _ := r.DB.GetProductThreshold(context.Background(), pc.Product.ProductCode)
+			
+			for _, sc := range pc.Scopes {
+				if sc.Threshold == nil || !sc.Threshold.Breached {
+					continue
+				}
+				
+				if th.AlertEmailEnabled {
+					action := "Đang theo dõi"
+					if sc.Threshold.ShouldAct {
+						action = "Đang xử lý: " + sc.Threshold.SuggestedAction
+					}
+					
+					_ = r.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+						Product:       pc.Product.Label,
+						Provider:      sc.ProviderCode,
+						SKU:           sc.SKUCode,
+						HealthStatus:  pc.HealthStatus, // Use product health as context
+						TriggerEvent:  "breach",
+						SuccessRate:   sc.Metrics.SuccessRate,
+						PendingRate:   sc.Metrics.PendingRate,
+						FailRate:      sc.Metrics.FailRate,
+						BreachReasons: sc.Threshold.BreachReasons,
+						ActionSummary: action,
+						CycleID:       &cycleID,
+					})
+				}
+			}
+		}
+	}()
 
 	if err := r.DB.FinishAnalysisCycleFull(ctx, cycleID, time.Now(), cycleHealth, cycleSummary, decision); err != nil {
 		return result, err

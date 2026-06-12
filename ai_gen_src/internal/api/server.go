@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opsone/internal/config"
+	"opsone/internal/notify"
 	"opsone/internal/store"
 	"opsone/internal/tools"
 )
@@ -16,15 +17,18 @@ import (
 type Server struct {
 	DB     *store.DB
 	Tools  *tools.Registry
+	Notify *notify.Service
 	Config config.Config
 	mux    *http.ServeMux
 }
 
 // NewServer wires dependencies.
 func NewServer(db *store.DB, cfg config.Config) *Server {
+	n := notify.NewService(db, cfg)
 	s := &Server{
 		DB:     db,
-		Tools:  tools.NewRegistry(db),
+		Tools:  tools.NewRegistry(db, n),
+		Notify: n,
 		Config: cfg,
 	}
 	s.routes()
@@ -241,7 +245,23 @@ func (s *Server) routeScopes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != http.MethodPost || len(parts) != 4 {
+	// Batch actions (product level, no SKU in path)
+	if len(parts) == 2 && action == "maintenance" && r.Method == http.MethodPost {
+		s.handleScopeMaintenanceBatchApprove(w, r, product)
+		return
+	}
+	if len(parts) == 4 && parts[1] == "maintenance" && parts[2] == "batch" && action == "cancel" && r.Method == http.MethodPost {
+		s.handleScopeMaintenanceBatchCancel(w, r, product)
+		return
+	}
+
+
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method", "Method not allowed")
+		return
+	}
+
+	if len(parts) != 4 {
 		writeError(w, http.StatusMethodNotAllowed, "method", "Method not allowed")
 		return
 	}

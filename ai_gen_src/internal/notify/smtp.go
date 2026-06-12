@@ -8,18 +8,26 @@ import (
 	"opsone/internal/config"
 )
 
-// SendSMTP sends plain-text email via SMTP (§8.9). MailHog: localhost:1025.
+// SendSMTP sends plain-text email via SMTP (§8.9).
 func SendSMTP(cfg config.Config, to []string, subject, body string) error {
+	return SendSMTPWithSender(cfg, cfg.SMTPFrom, to, subject, body)
+}
+
+// SendSMTPWithSender sends plain-text email with custom from address.
+func SendSMTPWithSender(cfg config.Config, from string, to []string, subject, body string) error {
 	if len(to) == 0 {
 		return fmt.Errorf("no recipients")
 	}
+	if from == "" {
+		from = cfg.SMTPFrom
+	}
 	addr := fmt.Sprintf("%s:%s", cfg.SMTPHost, cfg.SMTPPort)
-	msg := buildMessage(cfg.SMTPFrom, to, subject, body)
+	msg := buildMessage(from, to, subject, body)
 	var auth smtp.Auth
 	if cfg.SMTPUser != "" {
 		auth = smtp.PlainAuth("", cfg.SMTPUser, cfg.SMTPPass, cfg.SMTPHost)
 	}
-	return smtp.SendMail(addr, auth, cfg.SMTPFrom, to, []byte(msg))
+	return smtp.SendMail(addr, auth, from, to, []byte(msg))
 }
 
 func buildMessage(from string, to []string, subject, body string) string {

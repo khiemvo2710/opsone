@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"opsone/internal/agent"
+	"opsone/internal/notify"
 	"opsone/internal/store"
 	"opsone/internal/tools"
 )
@@ -295,6 +298,19 @@ func (s *Server) handleScopeMaintenanceCancel(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusNotFound, "not_found", "Không có cửa sổ bảo trì đang hoạt động")
 		return
 	}
+
+	// Send notification
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       product,
+			SKU:           sku,
+			HealthStatus:  "green",
+			TriggerEvent:  "maintenance_cancelled",
+			ActionSummary: fmt.Sprintf("Hủy bảo trì %s/%s", product, sku),
+			Actor:         by,
+		})
+	}()
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"product_code": product,
 		"sku_code":     sku,
@@ -347,6 +363,21 @@ func (s *Server) handleScopeMaintenanceReopenService(w http.ResponseWriter, r *h
 		writeError(w, http.StatusBadRequest, "reopen_failed", err.Error())
 		return
 	}
+
+	// Send notification
+	if cancelled > 0 {
+		go func() {
+			_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+				Product:       product,
+				SKU:           sku,
+				HealthStatus:  "green",
+				TriggerEvent:  "maintenance_completed",
+				ActionSummary: fmt.Sprintf("Mở lại dịch vụ %s/%s (kết thúc bảo trì)", product, sku),
+				Actor:         by,
+			})
+		}()
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"product_code":   product,
 		"sku_code":       sku,
@@ -393,6 +424,19 @@ func (s *Server) handleScopeMaintenanceExtend(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusNotFound, "not_found", "Không có cửa sổ bảo trì đang hoạt động")
 		return
 	}
+	by := actorFromRequest(r, s.Config.DevAuthBypass)
+	// Send notification
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       product,
+			SKU:           sku,
+			HealthStatus:  "yellow",
+			TriggerEvent:  "maintenance_active",
+			ActionSummary: fmt.Sprintf("Gia hạn bảo trì %s/%s", product, sku),
+			Actor:         by,
+		})
+	}()
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"product_code": product,
 		"sku_code":     sku,
@@ -401,4 +445,162 @@ func (s *Server) handleScopeMaintenanceExtend(w http.ResponseWriter, r *http.Req
 		"starts_at":    startsAt,
 		"ends_at":      endsAt,
 	})
+}
+func (s *Server) handleScopeMaintenanceBatchApprove(w http.ResponseWriter, r *http.Request, product string) {
+	if !requireAdmin(w, r, s.Config.DevAuthBypass) {
+		return
+	}
+	ctx := r.Context()
+	var body struct {
+		SKUs        []string `json:"skus"`
+		Reason      string   `json:"reason"`
+		StartsAt    string   `json:"starts_at"`
+		EndsAt      string   `json:"ends_at"`
+		DurationMin int      `json:"duration_min"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_input", "JSON không hợp lệ")
+		return
+	}
+	if len(body.SKUs) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_input", "Thiếu danh sách SKUs")
+		return
+	}
+
+	defaultMin := maintenanceDefaultDurationMin(ctx, s.DB)
+	startsAt, endsAt, err := parseMaintenanceWindow(body.StartsAt, body.EndsAt, body.DurationMin, defaultMin)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_window", err.Error())
+		return
+	}
+	by := actorFromRequest(r, s.Config.DevAuthBypass)
+	reason := body.Reason
+	if reason == "" {
+		reason = "Bảo trì hàng loạt — admin duyệt"
+	}
+
+	var results []map[string]any
+	for _, sku := range body.SKUs {
+		providers, err := s.DB.GetRoutingForScope(ctx, product, sku)
+		if err != nil {
+			continue
+		}
+		var targets []string
+		for _, p := range providers {
+			if p.TrafficPct > 0 {
+				targets = append(targets, p.ProviderCode)
+			}
+		}
+		if len(targets) == 0 {
+			continue
+		}
+		
+		applied, _ := applyMaintenanceWithSkipNotify(ctx, s.Tools, product, sku, by, reason, targets, startsAt, endsAt)
+		results = append(results, map[string]any{
+			"sku": sku,
+			"applied": applied,
+		})
+	}
+
+	// Send grouped notification
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       product,
+			SKUs:          body.SKUs,
+			HealthStatus:  "yellow",
+			TriggerEvent:  "maintenance_active",
+			ActionSummary: fmt.Sprintf("Bảo trì hàng loạt %d SKU", len(body.SKUs)),
+			Reason:        reason,
+			Actor:         by,
+		})
+	}()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"product": product,
+		"results": results,
+	})
+}
+
+func (s *Server) handleScopeMaintenanceBatchCancel(w http.ResponseWriter, r *http.Request, product string) {
+	if !requireAdmin(w, r, s.Config.DevAuthBypass) {
+		return
+	}
+	ctx := r.Context()
+	var body struct {
+		SKUs []string `json:"skus"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_input", "JSON không hợp lệ")
+		return
+	}
+	if len(body.SKUs) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_input", "Thiếu danh sách SKUs")
+		return
+	}
+
+	by := actorFromRequest(r, s.Config.DevAuthBypass)
+	var cancelledTotal int64
+	var cancelledSkus []string
+
+	for _, sku := range body.SKUs {
+		n, err := s.DB.CancelActiveMaintenanceForSKU(ctx, product, sku, by)
+		if err == nil && n > 0 {
+			cancelledTotal += n
+			cancelledSkus = append(cancelledSkus, sku)
+		}
+	}
+
+	if cancelledTotal > 0 {
+		// Send grouped notification
+		go func() {
+			_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+				Product:       product,
+				SKUs:          cancelledSkus,
+				HealthStatus:  "green",
+				TriggerEvent:  "maintenance_completed",
+				ActionSummary: fmt.Sprintf("Mở lại dịch vụ hàng loạt %d SKU", len(cancelledSkus)),
+				Actor:         by,
+			})
+		}()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"product":   product,
+		"cancelled": cancelledTotal,
+		"skus":      cancelledSkus,
+	})
+}
+
+func applyMaintenanceWithSkipNotify(
+	ctx context.Context,
+	toolsReg *tools.Registry,
+	product, sku, by, reason string,
+	targets []string,
+	startsAt, endsAt time.Time,
+) ([]map[string]any, error) {
+	var applied []map[string]any
+	for i, provider := range targets {
+		out, err := toolsReg.SetMaintenance(ctx, tools.SetMaintenanceInput{
+			Product:     product,
+			Provider:    provider,
+			SKU:         sku,
+			StartsAt:    startsAt,
+			EndsAt:      endsAt,
+			TriggerType: "admin_manual",
+			Reason:      reason,
+			Status:      "active",
+			Seq:         i,
+			SkipNotify:  true, // SHUT UP! we batch.
+			Actor:       by,
+		})
+		if err != nil {
+			return nil, err
+		}
+		applied = append(applied, map[string]any{
+			"maintenance_id": out.MaintenanceID,
+			"provider_code":  provider,
+			"status":         out.Status,
+		})
+	}
+	return applied, nil
 }

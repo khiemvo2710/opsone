@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 // AgentSettingsFull for API config GET.
@@ -15,6 +16,8 @@ type AgentSettingsFull struct {
 	MockScenario                  string `json:"mock_scenario"`
 	MaintenanceDefaultDurationMin int    `json:"maintenance_default_duration_min"`
 	AgentLocale                   string `json:"agent_locale"`
+	SmtpSender                    string `json:"smtp_sender"`
+	NotificationRecipients        string `json:"notification_recipients"`
 }
 
 // GetAgentSettingsFull loads settings for API.
@@ -22,20 +25,38 @@ func (db *DB) GetAgentSettingsFull(ctx context.Context) (AgentSettingsFull, erro
 	const query = `
 		SELECT scheduler_enabled, scheduler_interval_min, data_source,
 		       mock_enabled, mock_interval_min, mock_scenario,
-		       maintenance_default_duration_min, agent_locale
+		       maintenance_default_duration_min, agent_locale,
+		       smtp_sender, notification_recipients
 		FROM agent_settings WHERE id = 1`
 	var s AgentSettingsFull
 	var schedEn, mockEn int
+	var recipients []byte
 	err := db.QueryRowContext(ctx, query).Scan(
 		&schedEn, &s.SchedulerIntervalMin, &s.DataSource,
 		&mockEn, &s.MockIntervalMin, &s.MockScenario,
 		&s.MaintenanceDefaultDurationMin, &s.AgentLocale,
+		&s.SmtpSender, &recipients,
 	)
 	if err != nil {
 		return AgentSettingsFull{}, err
 	}
 	s.SchedulerEnabled = schedEn == 1
 	s.MockEnabled = mockEn == 1
+
+	// Convert JSON array of strings to semicolon-separated string for UI
+	var recs []string
+	if len(recipients) > 0 {
+		_ = json.Unmarshal(recipients, &recs)
+	}
+	// Join with ;
+	s.NotificationRecipients = ""
+	for i, r := range recs {
+		if i > 0 {
+			s.NotificationRecipients += ";"
+		}
+		s.NotificationRecipients += r
+	}
+
 	return s, nil
 }
 
@@ -46,6 +67,8 @@ type ConfigUpdatePatch struct {
 	MockEnabled                   *bool   `json:"mock_enabled"`
 	MockScenario                  *string `json:"mock_scenario"`
 	MaintenanceDefaultDurationMin *int    `json:"maintenance_default_duration_min"`
+	SmtpSender                    *string `json:"smtp_sender"`
+	NotificationRecipients        *string `json:"notification_recipients"`
 }
 
 // ApplyConfigUpdate updates agent_settings id=1.
@@ -82,6 +105,26 @@ func (db *DB) ApplyConfigUpdate(ctx context.Context, p ConfigUpdatePatch) error 
 	if p.MaintenanceDefaultDurationMin != nil {
 		v := NormalizeMaintenanceDefaultDurationMin(*p.MaintenanceDefaultDurationMin)
 		if _, err := db.ExecContext(ctx, `UPDATE agent_settings SET maintenance_default_duration_min = ? WHERE id = 1`, v); err != nil {
+			return err
+		}
+	}
+	if p.SmtpSender != nil {
+		if _, err := db.ExecContext(ctx, `UPDATE agent_settings SET smtp_sender = ? WHERE id = 1`, *p.SmtpSender); err != nil {
+			return err
+		}
+	}
+	if p.NotificationRecipients != nil {
+		// Convert semicolon-separated string to JSON array of strings
+		parts := strings.Split(*p.NotificationRecipients, ";")
+		recs := []string{}
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				recs = append(recs, p)
+			}
+		}
+		recsJSON, _ := json.Marshal(recs)
+		if _, err := db.ExecContext(ctx, `UPDATE agent_settings SET notification_recipients = ? WHERE id = 1`, recsJSON); err != nil {
 			return err
 		}
 	}

@@ -117,20 +117,19 @@ func (db *DB) ListProvidersForProduct(ctx context.Context, productCode string, a
 
 // ListSKUsForProduct returns SKUs for a sku-mode product.
 func (db *DB) ListSKUsForProduct(ctx context.Context, productCode string, enabledOnly bool) ([]domain.SKU, error) {
-	query := `
+	rows, err := db.QueryContext(ctx, `
 		SELECT ps.sku_code, ps.label, ps.enabled
 		FROM products p
 		JOIN product_skus ps ON ps.product_id = p.id
-		WHERE p.product_code = ?`
-	if enabledOnly {
-		query += ` AND ps.enabled = 1`
-	}
-	query += ` ORDER BY
+		WHERE p.product_code = ?` + (func() string {
+		if enabledOnly {
+			return ` AND ps.enabled = 1`
+		}
+		return ""
+	}()) + ` ORDER BY
 		CASE WHEN ps.sku_code REGEXP '^[0-9]+$' THEN 0 ELSE 1 END,
 		CASE WHEN ps.sku_code REGEXP '^[0-9]+$' THEN CAST(ps.sku_code AS UNSIGNED) ELSE NULL END,
-		ps.sku_code`
-
-	rows, err := db.QueryContext(ctx, query, productCode)
+		ps.sku_code`, productCode)
 	if err != nil {
 		return nil, fmt.Errorf("list skus: %w", err)
 	}

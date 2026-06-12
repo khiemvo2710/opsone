@@ -700,7 +700,7 @@ export function ServiceOverviewTable({
                       <>
                         <td className="overview-table__sku-cell">
                           <div className="overview-table__sku-cell-inner">
-                            <span className="overview-table__sku-name">{fmtSku(row.sku_code)}</span>
+                            <span className="overview-table__sku-name" style={{ flexGrow: 1 }}>{fmtSku(row.sku_code)}</span>
                           </div>
                         </td>
                         <td>

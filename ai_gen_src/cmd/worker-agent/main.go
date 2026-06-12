@@ -11,6 +11,7 @@ import (
 	"opsone/internal/agent"
 	"opsone/internal/config"
 	"opsone/internal/healthserver"
+	"opsone/internal/notify"
 	"opsone/internal/store"
 )
 
@@ -39,7 +40,8 @@ func main() {
 	interval := agent.IntervalFromSettings(settings)
 	log.Printf("OpsOne worker-agent (core) starting interval=%s data_source=%s", interval, settings.DataSource)
 
-	runner := agent.NewRunner(db)
+	n := notify.NewService(db, cfg)
+	runner := agent.NewRunner(db, n)
 	if err := runner.RunBlocking(ctx, interval); err != nil && err != context.Canceled {
 		log.Fatalf("agent worker: %v", err)
 	}

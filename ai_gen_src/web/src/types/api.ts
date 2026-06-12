@@ -102,6 +102,8 @@ export interface AgentConfig {
   mock_scenario: string;
   maintenance_default_duration_min: number;
   agent_locale: string;
+  smtp_sender: string;
+  notification_recipients: string;
 }
 
 export interface Product {

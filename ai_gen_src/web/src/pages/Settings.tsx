@@ -63,6 +63,8 @@ export function Settings() {
       mock_scenario: form.mock_scenario,
       maintenance_default_duration_min:
         duration > 0 ? duration : DEFAULT_MAINTENANCE_MIN,
+      smtp_sender: form.smtp_sender,
+      notification_recipients: form.notification_recipients,
     });
   };
 
@@ -115,6 +117,33 @@ export function Settings() {
               }
             />
           </label>
+        </div>
+
+        <div className="settings-group">
+          <h2 className="settings-group__title">Thông báo Email</h2>
+          <div className="settings-field">
+            <span className="settings-field__label">Email người gửi</span>
+            <input
+              type="email"
+              className="settings-input"
+              placeholder="config@opsone.com"
+              value={form.smtp_sender || ''}
+              onChange={(e) => update('smtp_sender', e.target.value)}
+            />
+          </div>
+          <div className="settings-field">
+            <span className="settings-field__label">Người nhận (phân cách bởi dấu ;)</span>
+            <textarea
+              className="settings-input"
+              style={{ minHeight: '80px' }}
+              placeholder="ops@company.com; admin@company.com"
+              value={form.notification_recipients || ''}
+              onChange={(e) => update('notification_recipients', e.target.value)}
+            />
+          </div>
+          <p className="muted" style={{ fontSize: '12px', marginTop: '4px' }}>
+            OpsOne sẽ sử dụng cấu hình SMTP Global và ghi nhận danh sách người nhận này cho các thông báo bảo trì/vượt ngưỡng.
+          </p>
         </div>
 
         <div className="settings-group">

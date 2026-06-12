@@ -44,9 +44,9 @@ type Provider struct {
 
 // SKU under a product.
 type SKU struct {
-	SKUCode string
-	Label   string
-	Enabled bool
+	SKUCode           string
+	Label             string
+	Enabled           bool
 }
 
 // RoutingPct row for a product/sku/provider.

@@ -538,36 +538,23 @@ export function Dashboard() {
   });
 
   const approveProductMaintenance = useMutation({
-    mutationFn: async (payload: ProductMaintenancePayload) => {
-      const failed: string[] = [];
-      for (const skuCode of payload.skuCodes) {
-        try {
-          await api(`/scopes/${payload.productCode}/${skuCode}/maintenance/approve`, {
-            method: 'POST',
-            body: JSON.stringify({
-              reason: payload.reason,
-              starts_at: payload.startsAt,
-              ends_at: payload.endsAt,
-            }),
-          });
-        } catch {
-          failed.push(skuCode || '—');
-        }
-      }
-      if (failed.length > 0) {
-        throw new ApiClientError({
-          code: 'partial_failure',
-          message_vi: `Bảo trì thất bại ${failed.length}/${payload.skuCodes.length} SKU: ${failed.join(', ')}`,
-        });
-      }
-    },
+    mutationFn: (payload: ProductMaintenancePayload) =>
+      api(`/scopes/${payload.productCode}/maintenance`, {
+        method: 'POST',
+        body: JSON.stringify({
+          skus: payload.skuCodes,
+          reason: payload.reason,
+          starts_at: payload.startsAt,
+          ends_at: payload.endsAt,
+        }),
+      }),
     onMutate: (payload) => {
       setBusyProductKey(payload.productCode);
     },
     onSuccess: async (_, payload) => {
       showToast(
         'ok',
-        `Đã bảo trì toàn bộ ${payload.skuCodes.length} SKU của ${payload.productCode}.`,
+        `Đã lên lịch bảo trì ${payload.skuCodes.length} SKU của ${payload.productCode}.`,
       );
       await qc.refetchQueries({ queryKey: ['dashboard-overview'] });
       void qc.invalidateQueries({ queryKey: ['health-status'] });
@@ -582,28 +569,13 @@ export function Dashboard() {
   });
 
   const reopenProductMaintenance = useMutation({
-    mutationFn: async (payload: ProductReopenMaintenancePayload) => {
-      const failed: string[] = [];
-      for (const scope of payload.scopes) {
-        try {
-          await api<{ applied: boolean }>(
-            `/scopes/${payload.productCode}/${scope.skuCode}/maintenance/reopen-service`,
-            {
-              method: 'POST',
-              body: JSON.stringify({ maintenance_ids: scope.maintenanceIds ?? [] }),
-            },
-          );
-        } catch {
-          failed.push(scope.skuCode || '—');
-        }
-      }
-      if (failed.length > 0) {
-        throw new ApiClientError({
-          code: 'partial_failure',
-          message_vi: `Mở lại thất bại ${failed.length}/${payload.scopes.length} SKU: ${failed.join(', ')}`,
-        });
-      }
-    },
+    mutationFn: (payload: ProductReopenMaintenancePayload) =>
+      api(`/scopes/${payload.productCode}/maintenance/batch/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({
+          skus: payload.scopes.map((s) => s.skuCode),
+        }),
+      }),
     onMutate: (payload) => {
       setBusyProductKey(payload.productCode);
     },

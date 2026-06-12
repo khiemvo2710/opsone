@@ -584,7 +584,7 @@ func (s *Server) buildProductContextForScope(
 	providers map[string]float64,
 	th store.ProductThreshold,
 ) (agent.ProductContext, error) {
-	reg := tools.NewRegistry(s.DB)
+	reg := tools.NewRegistry(s.DB, s.Notify)
 	routing, err := reg.GetRouting(ctx, tools.GetRoutingInput{Product: product})
 	if err != nil {
 		return agent.ProductContext{}, err

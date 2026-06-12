@@ -146,5 +146,7 @@ func configJSON(s store.AgentSettingsFull) map[string]any {
 		"mock_scenario":                    s.MockScenario,
 		"maintenance_default_duration_min": store.NormalizeMaintenanceDefaultDurationMin(s.MaintenanceDefaultDurationMin),
 		"agent_locale":                     s.AgentLocale,
+		"smtp_sender":                      s.SmtpSender,
+		"notification_recipients":          s.NotificationRecipients,
 	}
 }

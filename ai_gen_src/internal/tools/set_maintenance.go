@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"opsone/internal/notify"
 )
 
 func normalizeMaintenanceTrigger(trigger string) string {
@@ -32,7 +33,9 @@ type SetMaintenanceInput struct {
 	Reason      string
 	Status      string
 	CycleID     *uint64
-	Seq         int // disambiguates multi-provider SKU-wide approve in the same second
+	Seq         int    // disambiguates multi-provider SKU-wide approve in the same second
+	SkipNotify  bool   // If true, do not send notification (caller will batch)
+	Actor       string // Who performed the action
 }
 
 // SetMaintenanceOutput §6.9.
@@ -79,6 +82,28 @@ func (r *Registry) SetMaintenance(ctx context.Context, in SetMaintenanceInput) (
 	mid := buildMaintenanceID(in.Provider, in.Seq, now)
 	if err := r.DB.InsertMaintenance(ctx, mid, in.Product, in.Provider, in.SKU, in.StartsAt, in.EndsAt, status, trigger, in.Reason, in.CycleID); err != nil {
 		return SetMaintenanceOutput{}, err
+	}
+
+	// Send notification
+	if !in.SkipNotify {
+		go func() {
+			actor := in.Actor
+			if actor == "" {
+				actor = "OpsOne"
+			}
+			_ = r.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+				Product:       in.Product,
+				Provider:      in.Provider,
+				SKU:           in.SKU,
+				HealthStatus:  "yellow", // Maintenance is usually a warning
+				TriggerEvent:  "maintenance_active",
+				ActionSummary: fmt.Sprintf("Bắt đầu bảo trì (%s)", mid),
+				Reason:        in.Reason,
+				MaintenanceID: &mid,
+				CycleID:       in.CycleID,
+				Actor:         actor,
+			})
+		}()
 	}
 
 	ds, _ := r.dataSource(ctx)

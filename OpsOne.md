@@ -3635,7 +3635,7 @@ COMMIT
 
 ### 8.9 Email thông báo vận hành & leo thang provider (chat)
 
-Sau khi OpsOne **thực thi routing** (`UpdateRouting`) hoặc **kích hoạt bảo trì** (`SetMaintenance` → `scheduled`/`active`), nếu dịch vụ vẫn **đỏ** hoặc metric xấu → **gửi email** team vận hành với đầy đủ ngữ cảnh và **gợi ý liên hệ provider** qua nhóm chat nội bộ.
+Sau khi OpsOne **thực thi routing** (`UpdateRouting`) hoặc **kích hoạt bảo trì** (`SetMaintenance` → `scheduled`/`active`), nếu dịch vụ vẫn **đỏ** hoặc metric xấu → **gửi email** team vận hành với đầy đủ ngữ cảnh và **gợi ý liên hệ provider** qua nhóm chat nội bộ. Mọi thông báo hành động phải ghi rõ **Người thực hiện** (tên Admin hoặc "OpsOne" nếu hành động do hệ thống tự động hoặc do vượt ngưỡng).
 
 **Điều kiện gửi mail (OR — ít nhất một):**
 
@@ -3705,6 +3705,7 @@ Lỗi hàng đầu: -3004 (142 lượt), -22 (38 lượt)
   Trước:  ESALE 70% | IMEDIA 20% | SHOPPAY 10%
   Sau:    ESALE **0%** | IMEDIA 55% | SHOPPAY 45%
   Thời điểm: 2026-06-04 10:10 +07  |  Kích hoạt: tự động
+  Người thực hiện: OpsOne
 
 ── Leo thang — nhờ nhà cung cấp kiểm tra ──
 Vui lòng vào nhóm chat và tag đội provider:
@@ -3732,6 +3733,8 @@ Nhà cung cấp: ESALE (chỉ một provider)
 Bắt đầu:     2026-06-04 10:15
 Kết thúc:    2026-06-04 11:15
 Trạng thái:  Đang bảo trì
+Người thực hiện: Admin A (hoặc OpsOne nếu tự động)
+```
 
 ── Chỉ số (trước bảo trì) ──
 Thành công 42% | Pending 22% | Lỗi 35%

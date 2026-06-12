@@ -61,7 +61,7 @@ func TestAgentDryRunCycle(t *testing.T) {
 		t.Fatalf("mock seed: %v", err)
 	}
 
-	runner := agent.NewDryRunner(db)
+	runner := agent.NewDryRunner(db, nil)
 	cycleID, rows, err := runner.RunOnce(ctx)
 	if err != nil {
 		t.Fatalf("dry-run: %v", err)

@@ -13,7 +13,7 @@ func HealthLabel(status string) string {
 	case "red":
 		return "Đang có vấn đề"
 	case "yellow":
-		return "Đang theo dõi / xử lý"
+		return "Đang theo dõi"
 	default:
 		return "Hệ thống OK"
 	}

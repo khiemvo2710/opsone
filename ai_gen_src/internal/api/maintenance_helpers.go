@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opsone/internal/domain"
+	"opsone/internal/notify"
 	"opsone/internal/store"
 	"opsone/internal/tools"
 )
@@ -156,6 +157,8 @@ func applyMaintenanceTargets(
 			Reason:      reason,
 			Status:      "active",
 			Seq:         i,
+			SkipNotify:  true, // SHUT UP! we batch providers.
+			Actor:       by,
 		})
 		if err != nil {
 			for _, prev := range applied {
@@ -172,6 +175,21 @@ func applyMaintenanceTargets(
 			"status":         out.Status,
 		})
 	}
+
+	// Send grouped notification for the SKU
+	go func() {
+		_ = toolsReg.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       product,
+			SKU:           sku,
+			Providers:     targets,
+			HealthStatus:  "yellow",
+			TriggerEvent:  "maintenance_active",
+			ActionSummary: fmt.Sprintf("Bắt đầu bảo trì %d provider (%s)", len(targets), sku),
+			Reason:        reason,
+			Actor:         by,
+		})
+	}()
+
 	return applied, nil
 }
 

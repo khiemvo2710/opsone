@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"opsone/internal/config"
@@ -15,7 +16,9 @@ import (
 type EmailParams struct {
 	Product        string
 	Provider       string
+	Providers      []string // For batch
 	SKU            string
+	SKUs           []string // For batch
 	HealthStatus   string
 	TriggerEvent   string
 	SuccessRate    float64
@@ -28,12 +31,20 @@ type EmailParams struct {
 	CycleID        *uint64
 	AgentChangeID  *uint64
 	MaintenanceID  *string
+	Reason         string // Reason for maintenance
+	IsService      bool   // True if service-level notification
+	Actor          string // Who performed the action (Manual name or 'OpsOne')
 }
 
 // Service sends ops notification emails (§8.9).
 type Service struct {
 	DB     *store.DB
 	Config config.Config
+}
+
+// NewService creates a notify service.
+func NewService(db *store.DB, cfg config.Config) *Service {
+	return &Service{DB: db, Config: cfg}
 }
 
 // SendIfNeeded checks cooldown and sends or logs notification.
@@ -49,10 +60,21 @@ func (s *Service) SendIfNeeded(ctx context.Context, p EmailParams) error {
 		return nil
 	}
 
+	// Load settings from DB
+	settings, err := s.DB.GetAgentSettings(ctx)
+	if err != nil {
+		return err
+	}
+
 	chat, chatJSON, _ := s.loadChat(ctx, p.Provider)
 	subject, body := RenderEmailVI(p, chat)
-	recipients := []string{"ops-team@company.local"}
+
+	recipients := settings.NotificationRecipients
+	if len(recipients) == 0 {
+		recipients = []string{"ops-team@company.local"} // fallback
+	}
 	recipientsJSON, _ := json.Marshal(recipients)
+
 	metricsJSON, _ := json.Marshal(map[string]any{
 		"success_rate": p.SuccessRate,
 		"pending_rate": p.PendingRate,
@@ -63,7 +85,12 @@ func (s *Service) SendIfNeeded(ctx context.Context, p EmailParams) error {
 	if s.Config.NotificationMock {
 		status = "sent"
 	} else {
-		if err := SendSMTP(s.Config, recipients, subject, body); err != nil {
+		// Use SmtpSender from DB if not empty
+		smtpFrom := settings.SmtpSender
+		if smtpFrom == "" {
+			smtpFrom = s.Config.SMTPFrom
+		}
+		if err := SendSMTPWithSender(s.Config, smtpFrom, recipients, subject, body); err != nil {
 			status = "failed"
 		}
 	}
@@ -90,23 +117,58 @@ func RenderEmailVI(p EmailParams, chat store.ChatEscalation) (subject, body stri
 	icon := "🔴"
 	if p.HealthStatus == "yellow" {
 		icon = "🟡"
+	} else if p.HealthStatus == "green" {
+		icon = "🟢"
 	}
-	subject = fmt.Sprintf("[OpsOne %s] %s — %s", icon, p.Product, p.ActionSummary)
+	
+	title := p.Product
+	if len(p.SKUs) > 0 {
+		title = fmt.Sprintf("%s — %d SKU", p.Product, len(p.SKUs))
+	} else if p.SKU != "" {
+		title = fmt.Sprintf("%s — SKU %s", p.Product, p.SKU)
+	}
+	
+	subject = fmt.Sprintf("[OpsOne %s] %s — %s", icon, title, p.ActionSummary)
 
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "── Tình trạng hiện tại ──\n")
 	fmt.Fprintf(&buf, "Sản phẩm:     %s\n", p.Product)
-	fmt.Fprintf(&buf, "Nhà cung cấp: %s\n", p.Provider)
-	fmt.Fprintf(&buf, "Thành công:   %.0f%%  |  Pending: %.0f%%  |  Lỗi: %.0f%%\n", p.SuccessRate, p.PendingRate, p.FailRate)
-	if len(p.BreachReasons) > 0 {
-		fmt.Fprintf(&buf, "Ngưỡng vượt:  %s\n", joinReasons(p.BreachReasons))
+	if len(p.SKUs) > 0 {
+		fmt.Fprintf(&buf, "Danh sách SKU: %s\n", strings.Join(p.SKUs, ", "))
+	} else if p.SKU != "" {
+		fmt.Fprintf(&buf, "SKU:          %s\n", p.SKU)
 	}
+	if len(p.Providers) > 0 {
+		fmt.Fprintf(&buf, "Providers:    %s\n", strings.Join(p.Providers, ", "))
+	} else if p.Provider != "" {
+		fmt.Fprintf(&buf, "Nhà cung cấp: %s\n", p.Provider)
+	}
+	
+	if p.TriggerEvent != "maintenance_active" && p.TriggerEvent != "maintenance_completed" && p.TriggerEvent != "maintenance_cancelled" {
+		fmt.Fprintf(&buf, "Thành công:   %.0f%%  |  Pending: %.0f%%  |  Lỗi: %.0f%%\n", p.SuccessRate, p.PendingRate, p.FailRate)
+		if len(p.BreachReasons) > 0 {
+			fmt.Fprintf(&buf, "Ngưỡng vượt:  %s\n", joinReasons(p.BreachReasons))
+		}
+	}
+
 	if p.ActionSummary != "" {
 		fmt.Fprintf(&buf, "\n── Hành động OpsOne ──\n%s\n", p.ActionSummary)
 	}
-	fmt.Fprintf(&buf, "\n── Leo thang ──\n")
-	fmt.Fprintf(&buf, "  Ứng dụng: %s | Nhóm: %s | Tag: %s\n", chat.ChatAppName, chat.ChatGroupName, chat.MentionTags)
-	fmt.Fprintf(&buf, "\nThời điểm: %s\n", time.Now().Format("2006-01-02 15:04 -0700"))
+	
+	if p.Reason != "" {
+		fmt.Fprintf(&buf, "\n── Nguyên nhân bảo trì ──\n%s\n", p.Reason)
+	}
+
+	if p.Actor != "" {
+		fmt.Fprintf(&buf, "Người thực hiện: %s\n", p.Actor)
+	}
+
+	if chat.ProviderCode != "" {
+		fmt.Fprintf(&buf, "\n── Leo thang ──\n")
+		fmt.Fprintf(&buf, "  Ứng dụng: %s | Nhóm: %s | Tag: %s\n", chat.ChatAppName, chat.ChatGroupName, chat.MentionTags)
+	}
+	
+	fmt.Fprintf(&buf, "\nThời điểm: %s\n", time.Now().Format("2006-01-02 15:04:05 -0700"))
 	return subject, buf.String()
 }
 

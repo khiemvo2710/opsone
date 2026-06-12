@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opsone/internal/agent"
+	"opsone/internal/notify"
 	"opsone/internal/output"
 	"opsone/internal/store"
 	"opsone/internal/threshold"
@@ -23,6 +24,7 @@ type overviewCaches struct {
 	providersByProd  map[string]tools.GetProvidersOutput
 	latestCycleID    uint64
 	historyByScope   map[string][]store.ScopeHistoryPoint
+	notify           *notify.Service
 }
 
 type scopeSnapshot struct {
@@ -78,7 +80,8 @@ func (s *Server) newOverviewCaches(ctx context.Context) (overviewCaches, error) 
 		routingByProd:   make(map[string]tools.GetRoutingOutput),
 		providersByProd: make(map[string]tools.GetProvidersOutput),
 		latestCycleID:   latestCycle,
-		historyByScope: historyByScope,
+		historyByScope:  historyByScope,
+		notify:          s.Notify,
 	}, nil
 }
 
@@ -91,7 +94,7 @@ func (c *overviewCaches) productRouting(ctx context.Context, db *store.DB, produ
 	if r, ok := c.routingByProd[product]; ok {
 		return r, c.providersByProd[product], nil
 	}
-	reg := tools.NewRegistry(db)
+	reg := tools.NewRegistry(db, c.notify)
 	routing, err := reg.GetRouting(ctx, tools.GetRoutingInput{Product: product})
 	if err != nil {
 		return tools.GetRoutingOutput{}, tools.GetProvidersOutput{}, err

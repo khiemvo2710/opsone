@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"opsone/internal/notify"
 	"opsone/internal/output"
 	"opsone/internal/rules"
 	"opsone/internal/store"
@@ -14,13 +15,14 @@ import (
 
 // Reasoner runs rules + generates outputs (Phase 4, §7–§8).
 type Reasoner struct {
-	DB    *store.DB
-	Rules rules.Engine
+	DB     *store.DB
+	Rules  rules.Engine
+	Notify *notify.Service
 }
 
 // NewReasoner creates a reasoner.
-func NewReasoner(db *store.DB) *Reasoner {
-	return &Reasoner{DB: db, Rules: rules.Engine{}}
+func NewReasoner(db *store.DB, n *notify.Service) *Reasoner {
+	return &Reasoner{DB: db, Rules: rules.Engine{}, Notify: n}
 }
 
 // Process runs rules engine and persists Incident / RoutingPlan / Recommendation.
@@ -330,7 +332,7 @@ func (r *Reasoner) applyMaintenanceAuto(ctx context.Context, pc *ProductContext,
 	durationMin := store.NormalizeMaintenanceDefaultDurationMin(settings.MaintenanceDefaultDurationMin)
 	startsAt := time.Now()
 	endsAt := startsAt.Add(time.Duration(durationMin) * time.Minute)
-	reg := tools.NewRegistry(r.DB)
+	reg := tools.NewRegistry(r.DB, r.Notify)
 	reason := fmt.Sprintf("auto maintenance: %s", detail)
 	for i, provider := range targets {
 		_, err := reg.SetMaintenance(ctx, tools.SetMaintenanceInput{
@@ -343,6 +345,7 @@ func (r *Reasoner) applyMaintenanceAuto(ctx context.Context, pc *ProductContext,
 			Reason:      reason,
 			Status:      "active",
 			Seq:         i,
+			Actor:       "OpsOne",
 		})
 		if err != nil {
 			return err
@@ -359,7 +362,7 @@ func (r *Reasoner) applyRoutingPlanAuto(
 	plan RoutingPlanJSON,
 	incidentID *string,
 ) error {
-	reg := tools.NewRegistry(r.DB)
+	reg := tools.NewRegistry(r.DB, r.Notify)
 	out, err := reg.UpdateRouting(ctx, tools.UpdateRoutingInput{
 		Product:     pc.Product.ProductCode,
 		ServiceType: string(pc.Product.ServiceType),

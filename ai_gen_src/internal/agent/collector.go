@@ -7,6 +7,7 @@ import (
 
 	"opsone/internal/catalog"
 	"opsone/internal/domain"
+	"opsone/internal/notify"
 	"opsone/internal/store"
 	"opsone/internal/threshold"
 	"opsone/internal/tools"
@@ -17,14 +18,16 @@ type Collector struct {
 	DB        *store.DB
 	Tools     *tools.Registry
 	Threshold *threshold.Evaluator
+	Notify    *notify.Service
 }
 
 // NewCollector creates a context collector.
-func NewCollector(db *store.DB) *Collector {
+func NewCollector(db *store.DB, n *notify.Service) *Collector {
 	return &Collector{
 		DB:        db,
-		Tools:     tools.NewRegistry(db),
+		Tools:     tools.NewRegistry(db, n),
 		Threshold: &threshold.Evaluator{DB: db},
+		Notify:    n,
 	}
 }
 
