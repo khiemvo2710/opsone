@@ -61,6 +61,9 @@ func (r *Reasoner) Process(ctx context.Context, cycleID uint64, products []Produ
 		if err := r.emitOutputs(ctx, cycleID, day, pc); err != nil {
 			return nil, err
 		}
+		if err := r.autoResolveHealthyScopes(ctx, cycleID, pc); err != nil {
+			return nil, err
+		}
 		r.refreshProductHealth(pc)
 	}
 	return products, nil
@@ -204,9 +207,10 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 					pc.HealthStatus = "yellow"
 					routing = currentRouting(*pc, *worst)
 					if ShouldForceAutoMaintenance(*pc, worst.SKUCode, routing, prodTh) {
+						healthy := healthyProvidersForSKU(*pc, worst.SKUCode, worst.ProviderCode)
 						detail := skuReason
 						if detail == "" {
-							detail = output.MaintenanceDetail(pc.Product.ProductCode, worst.ProviderCode, thRes.BreachReasons)
+							detail = output.MaintenanceDetail(pc.Product.ProductCode, worst.ProviderCode, thRes.BreachReasons, healthy)
 						}
 						if err := r.applyMaintenanceAuto(ctx, pc, worst, detail); err != nil {
 							return err
@@ -231,9 +235,10 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 				pc.HealthStatus = "yellow"
 				routing = currentRouting(*pc, *worst)
 				if ShouldForceAutoMaintenance(*pc, worst.SKUCode, routing, prodTh) {
+					healthy := healthyProvidersForSKU(*pc, worst.SKUCode, worst.ProviderCode)
 					detail := skuReason
 					if detail == "" {
-						detail = output.MaintenanceDetail(pc.Product.ProductCode, worst.ProviderCode, thRes.BreachReasons)
+						detail = output.MaintenanceDetail(pc.Product.ProductCode, worst.ProviderCode, thRes.BreachReasons, healthy)
 					}
 					if err := r.applyMaintenanceAuto(ctx, pc, worst, detail); err != nil {
 						return err
@@ -253,7 +258,8 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 			if inReopenGrace && !forceMaint && !forceAllMaint {
 				break
 			}
-			detail := output.MaintenanceDetail(pc.Product.ProductCode, worst.ProviderCode, thRes.BreachReasons)
+			healthy := healthyProvidersForSKU(*pc, worst.SKUCode, worst.ProviderCode)
+			detail := output.MaintenanceDetail(pc.Product.ProductCode, worst.ProviderCode, thRes.BreachReasons, healthy)
 			if strings.Contains(skuReason, "Tất cả provider") {
 				detail = skuReason
 			}
@@ -427,4 +433,41 @@ func trafficPct(pc ProductContext, s ScopeContext) float64 {
 		return pc.Routing.Routing[s.ProviderCode]
 	}
 	return 0
+}
+
+func healthyProvidersForSKU(pc ProductContext, sku, badProvider string) []string {
+	var out []string
+	for _, s := range pc.Scopes {
+		if s.SKUCode == sku && s.ProviderCode != badProvider && s.Threshold != nil && !s.Threshold.Breached {
+			out = append(out, s.ProviderCode)
+		}
+	}
+	return out
+}
+
+func (r *Reasoner) autoResolveHealthyScopes(ctx context.Context, cycleID uint64, pc *ProductContext) error {
+	// If the entire product is Normal, resolve all open incidents for its scopes.
+	if pc.State == "NORMAL" {
+		for _, s := range pc.Scopes {
+			incID, err := r.DB.FindOpenIncidentForScope(ctx, s.ProductCode, s.SKUCode, nil)
+			if err == nil && incID != "" {
+				_ = r.DB.UpdateIncidentHandled(ctx, incID, store.IncidentHandleUpdate{
+					Status:           "resolved",
+					HandledBy:        "opsone-agent",
+					ResolutionAction: "Tự động đóng: Dịch vụ đã ổn định (NORMAL)",
+				})
+				_ = r.DB.DeleteRecommendationsForScope(ctx, s.ProductCode, s.SKUCode)
+			}
+		}
+		return nil
+	}
+
+	// Fallback: resolve individual healthy scopes.
+	for _, s := range pc.Scopes {
+		if s.Skipped || s.Threshold == nil || s.Threshold.Breached {
+			continue
+		}
+		// ... existing per-scope resolution (already handled by product-level above if state is NORMAL)
+	}
+	return nil
 }

@@ -59,7 +59,7 @@ func (s *Server) ensureScopeSuggestion(
 		}
 		detail := action.eval.SuggestedActionReason
 		if detail == "" {
-			detail = output.MaintenanceDetail(product, action.worst.ProviderCode, action.eval.BreachReasons)
+			detail = output.MaintenanceDetail(product, action.worst.ProviderCode, action.eval.BreachReasons, nil)
 		}
 		return s.DB.InsertRecommendation(ctx, nil, nil, product, sku, "maintenance", detail)
 	default:
@@ -177,7 +177,7 @@ func (s *Server) maintenanceMapFromScopeAction(
 	}
 	reason := action.eval.SuggestedActionReason
 	if reason == "" {
-		reason = output.MaintenanceDetail(product, action.worst.ProviderCode, action.eval.BreachReasons)
+		reason = output.MaintenanceDetail(product, action.worst.ProviderCode, action.eval.BreachReasons, nil)
 	}
 	pm := map[string]any{
 		"reason":      reason,
@@ -806,7 +806,7 @@ func (s *Server) autoApplyMaintenanceForScope(
 	}
 	detail := eval.SuggestedActionReason
 	if detail == "" {
-		detail = output.MaintenanceDetail(product, worst.ProviderCode, eval.BreachReasons)
+		detail = output.MaintenanceDetail(product, worst.ProviderCode, eval.BreachReasons, nil)
 	}
 	providers, err := s.DB.GetRoutingForScope(ctx, product, sku)
 	if err != nil {

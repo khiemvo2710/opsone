@@ -1,7 +1,7 @@
 -- OpsOne kịch bản B: ZING chỉ provider ESALE (single-provider maintenance)
 -- Chạy SAU seed.sql — xem OpsOne.md §10.2
 
-USE traffic_agent;
+USE opsone;
 
 DELETE pp FROM product_providers pp
 JOIN products p ON p.id = pp.product_id

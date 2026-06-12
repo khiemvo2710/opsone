@@ -5,7 +5,7 @@ MYSQL_HOST ?= localhost
 MYSQL_PORT ?= 3306
 MYSQL_USER ?= app
 MYSQL_PASS ?= secret
-MYSQL_DB   ?= traffic_agent
+MYSQL_DB   ?= opsone
 MYSQL_DSN  ?= $(MYSQL_USER):$(MYSQL_PASS)@tcp($(MYSQL_HOST):$(MYSQL_PORT))/$(MYSQL_DB)?parseTime=true
 
 MYSQL_CMD = mysql -h$(MYSQL_HOST) -P$(MYSQL_PORT) -u$(MYSQL_USER) -p$(MYSQL_PASS) $(MYSQL_DB)

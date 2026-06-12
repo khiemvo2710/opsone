@@ -16,16 +16,17 @@ function Ensure-OpsOneMysqlDatabase {
     $dbExists = docker exec opsone-mysql mysql -uroot -prootsecret -N -e `
         "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='opsone';" 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($dbExists)) {
-        throw "Cannot inspect MySQL schemas as root. Check: docker compose logs mysql"
+        return $false
     }
     if ([int]$dbExists.Trim() -eq 0) {
         Write-Host "Database opsone missing on existing volume - creating app user grants..."
         $bootstrapSql = 'CREATE DATABASE IF NOT EXISTS opsone CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER IF NOT EXISTS ''app''@''%'' IDENTIFIED BY ''secret''; GRANT ALL PRIVILEGES ON opsone.* TO ''app''@''%''; FLUSH PRIVILEGES;'
         docker exec opsone-mysql mysql -uroot -prootsecret -e $bootstrapSql *>$null
         if ($LASTEXITCODE -ne 0) {
-            throw "Failed to bootstrap database 'opsone'. Try: docker compose down -v"
+            return $false
         }
     }
+    return $true
 }
 
 function Wait-OpsOneMysqlReady {
@@ -34,11 +35,12 @@ function Wait-OpsOneMysqlReady {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if (Test-OpsOneMysqlPing) {
-            Ensure-OpsOneMysqlDatabase
-            docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret opsone -e "SELECT 1" *>$null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "MySQL is ready."
-                return
+            if (Ensure-OpsOneMysqlDatabase) {
+                docker exec opsone-mysql mysql --default-character-set=utf8mb4 -uapp -psecret opsone -e "SELECT 1" *>$null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "MySQL is ready."
+                    return
+                }
             }
         }
         Start-Sleep -Seconds 2

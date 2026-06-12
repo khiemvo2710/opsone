@@ -215,3 +215,17 @@ func (db *DB) DeleteRecommendation(ctx context.Context, id uint64) error {
 	_, err := db.ExecContext(ctx, `DELETE FROM recommendations WHERE id = ?`, id)
 	return err
 }
+
+// DeleteRecommendationsForScope removes all pending recommendations for product+sku.
+func (db *DB) DeleteRecommendationsForScope(ctx context.Context, product, sku string) error {
+	pattern := "%"
+	if sku != "" {
+		pattern = "SKU " + sku + "%"
+	}
+	_, err := db.ExecContext(ctx, `
+		DELETE FROM recommendations
+		WHERE product_code = ? AND action_detail LIKE ?
+		  AND action_detail NOT LIKE '%DISMISSED:%'`,
+		product, pattern)
+	return err
+}

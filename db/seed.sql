@@ -1,7 +1,7 @@
 -- OpsOne — seed data
 -- Source: OpsOne.md §1.1, §13.10
 
-USE traffic_agent;
+USE opsone;
 
 INSERT INTO agent_settings (id, notification_recipients, agent_locale) VALUES (1, '["ops-team@company.com"]', 'vi-VN');
 

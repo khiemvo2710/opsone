@@ -338,7 +338,7 @@ func liveMaintenanceReason(product, sku string, snap scopeSnapshot, pm map[strin
 		}
 		reasons := store.SnapshotBreachReasons(success, pending, fail, pTxn, fTxn, th)
 		if len(reasons) > 0 {
-			return output.MaintenanceDetail(product, provider, reasons)
+			return output.MaintenanceDetail(product, provider, reasons, nil)
 		}
 	}
 	if raw, ok := pm["reason"].(string); ok && !strings.Contains(raw, "DISMISSED:") {

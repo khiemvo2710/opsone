@@ -2,11 +2,16 @@
 -- Source: OpsOne.md §13 | Engine: InnoDB | Charset: utf8mb4
 -- Convention: topup uses sku_code = '' (empty string, not NULL)
 
-CREATE DATABASE IF NOT EXISTS traffic_agent
+CREATE DATABASE IF NOT EXISTS opsone
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
-USE traffic_agent;
+USE opsone;
+
+-- Clear existing tables for a clean reset (§13)
+SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS chat_messages, chat_sessions, notification_log, provider_chat_escalation, config_audit_log, auto_routing_time_windows, agent_change_log, maintenance_windows, recommendations, routing_plans, incidents, health_status_product, agent_analysis_history, agent_analysis_cycles, metrics_snapshot, mock_error_stats, mock_metrics, mock_generator_run, product_alert_thresholds, routing_config, product_skus, product_providers, providers, products, agent_settings;
+SET FOREIGN_KEY_CHECKS = 1;
 
 -- 13.2 Catalog
 CREATE TABLE products (
@@ -90,7 +95,7 @@ CREATE TABLE agent_settings (
   auto_routing_mode       ENUM('recommend_only','time_window','always') NOT NULL DEFAULT 'recommend_only',
   mock_enabled            TINYINT(1)       NOT NULL DEFAULT 1,
   mock_interval_min       TINYINT UNSIGNED NOT NULL DEFAULT 1,
-  mock_scenario           ENUM('normal','esale_degrading','sku_local_fault','random_spike') NOT NULL DEFAULT 'normal',
+  mock_scenario           ENUM('normal','esale_degrading','sku_local_fault','random_spike','imedia_garena_pending') NOT NULL DEFAULT 'normal',
   mock_retention_hours    SMALLINT UNSIGNED NOT NULL DEFAULT 24,
   maintenance_default_duration_min TINYINT UNSIGNED NOT NULL DEFAULT 60,
   maintenance_auto_enabled TINYINT(1)      NOT NULL DEFAULT 0,

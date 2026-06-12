@@ -10,11 +10,8 @@ import { ASSISTANT_NAME } from '../utils/assistantIdentity';
 import { userBubbleLabel, applyProfileUpdate, inferProfileFromSingleMessage, profileChanged, type ChatUserProfile } from '../utils/chatUserProfile';
 import { CHAT_INTRO_MESSAGE } from '../utils/chatIntro';
 import {
-  buildOnboardingReply,
   buildProfileUpdateReply,
-  isLikelyOpsQuery,
   mergeProfileFromUserTexts,
-  onboardingFinished,
   shouldHandleAsProfileUpdate,
 } from '../utils/chatOnboarding';
 import { ChatAvatar } from './ChatAvatar';
@@ -149,7 +146,6 @@ export function ChatWidget() {
   const [userProfile, setUserProfile] = useState<ChatUserProfile>({});
   const [speechPrimed, setSpeechPrimed] = useState(false);
   const speechPrimingRef = useRef(false);
-  const onboardingCompleteRef = useRef(false);
   const userProfileRef = useRef<ChatUserProfile>({});
   const introShownRef = useRef(false);
   const initialLoadRef = useRef(true); // Track if this is initial page load
@@ -254,21 +250,18 @@ export function ChatWidget() {
       trimmed,
     ];
 
-    let nextProfile: ChatUserProfile;
-    if (onboardingCompleteRef.current) {
-      if (shouldHandleAsProfileUpdate(trimmed, true)) {
-        nextProfile = applyProfileUpdate(prevProfile, trimmed);
-      } else {
-        nextProfile = prevProfile;
-      }
-    } else {
-      nextProfile = mergeProfileFromUserTexts(userTexts, {});
-      const latest = inferProfileFromSingleMessage(trimmed);
-      if (latest.displayName) nextProfile.displayName = latest.displayName;
-      if (latest.honorific) nextProfile.honorific = latest.honorific;
-      if (latest.gender) nextProfile.gender = latest.gender;
-      if (latest.ageGroup) nextProfile.ageGroup = latest.ageGroup;
+    let nextProfile: ChatUserProfile = prevProfile;
+
+    if (shouldHandleAsProfileUpdate(trimmed, true)) {
+      nextProfile = applyProfileUpdate(prevProfile, trimmed);
     }
+    nextProfile = mergeProfileFromUserTexts(userTexts, nextProfile);
+
+    const latest = inferProfileFromSingleMessage(trimmed);
+    if (latest.displayName) nextProfile.displayName = latest.displayName;
+    if (latest.honorific) nextProfile.honorific = latest.honorific;
+    if (latest.gender) nextProfile.gender = latest.gender;
+    if (latest.ageGroup) nextProfile.ageGroup = latest.ageGroup;
 
     if (
       profileChanged(prevProfile, nextProfile) &&
@@ -294,28 +287,15 @@ export function ChatWidget() {
     let localAssistantReply: ChatMessage | null = null;
     let callBackend = false;
 
-    if (onboardingCompleteRef.current) {
-      if (shouldHandleAsProfileUpdate(trimmed, true)) {
-        localAssistantReply = appendMessage(
-          'assistant',
-          buildProfileUpdateReply(nextProfile, prevProfile, trimmed),
-        );
-      } else {
-        callBackend = true;
-      }
+    if (shouldHandleAsProfileUpdate(trimmed, true)) {
+      // If it's a profile update (e.g., "Tên tôi là Khiêm"), handle it locally
+      localAssistantReply = appendMessage(
+        'assistant',
+        buildProfileUpdateReply(nextProfile, prevProfile, trimmed),
+      );
     } else {
-      // Onboarding not complete yet
-      if (isLikelyOpsQuery(trimmed)) {
-        // User sends ops query before completing onboarding → process directly
-        callBackend = true;
-      } else if (onboardingFinished(nextProfile, trimmed)) {
-        // User provided name/profile info or skipped onboarding → complete onboarding
-        onboardingCompleteRef.current = true;
-        localAssistantReply = appendMessage('assistant', buildOnboardingReply(nextProfile, trimmed));
-      } else {
-        // User didn't provide name and didn't send ops query → ask for name
-        localAssistantReply = appendMessage('assistant', buildOnboardingReply(nextProfile, trimmed));
-      }
+      // Standard messages go to backend
+      callBackend = true;
     }
 
     setMessages((prev) => {
@@ -332,10 +312,10 @@ export function ChatWidget() {
   processUserMessageRef.current = processUserMessage;
 
   useEffect(() => {
-    if (!open || introShownRef.current) return;
+    if (!open || introShownRef.current || messages.length > 0) return;
     introShownRef.current = true;
     setMessages([appendMessage('assistant', CHAT_INTRO_MESSAGE)]);
-  }, [open]);
+  }, [open, messages.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -416,7 +396,7 @@ export function ChatWidget() {
     // Mark initial load as complete after component mounts
     const markInitialLoadDone = setTimeout(() => {
       initialLoadRef.current = false;
-    }, 500);
+    }, 10000);
 
     let es: EventSource | null = null;
 

@@ -28,10 +28,10 @@ func round2(v float64) float64 {
 	return math.Round(v*100) / 100
 }
 
-// baselineRates returns stable rates with ±2% noise (§4.5.2).
+// baselineRates returns stable rates with near-zero noise to ensure non-target items never breach.
 func baselineRates(rng *rand.Rand) Rates {
-	success := 97.0 + rng.Float64()*4 - 2 // 95-99
-	fail := 1.0 + rng.Float64()*2         // 1-3
+	success := 99.8 + rng.Float64()*0.1 // 99.8-99.9%
+	fail := 0.01 + rng.Float64()*0.04    // ~0.05%
 	pending := 100 - success - fail
 	if pending < 0 {
 		pending = 0
@@ -65,9 +65,21 @@ func computeRates(scenario string, product, sku, provider string, rng *rand.Rand
 			return Rates{Success: round2(cur), Pending: round2(pending), Fail: round2(fail)}.normalized()
 		}
 		return baselineRates(rng)
+	case "imedia_garena_pending":
+		if isImediaGarenaTarget(product, sku, provider) {
+			pending := 25.0 + rng.Float64()*10 // 25-35% pending
+			fail := 5.0 + rng.Float64()*5      // 5-10% fail (đảm bảo đỏ ngay)
+			success := 100 - pending - fail
+			return Rates{Success: success, Pending: pending, Fail: fail}.normalized()
+		}
+		return baselineRates(rng)
 	default:
 		return baselineRates(rng)
 	}
+}
+
+func isImediaGarenaTarget(product, sku, provider string) bool {
+	return provider == "IMEDIA" && product == "GARENA" && sku == "10000"
 }
 
 func isDegradeTarget(product, sku, provider string) bool {

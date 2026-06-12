@@ -20,6 +20,7 @@ func main() {
 		log.Fatal(err)
 	}
 	cfg.LogLLMStartup()
+	log.Printf("DEBUG: MYSQL_DSN=%s", cfg.MySQLDSN)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

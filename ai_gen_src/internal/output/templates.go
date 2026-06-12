@@ -58,8 +58,14 @@ func RoutingPlanReason(product, badProvider string, evidence []rules.RuleResult)
 }
 
 // MaintenanceDetail builds maintenance recommendation text (§8.5).
-func MaintenanceDetail(product, provider string, reasons []string) string {
-	msg := fmt.Sprintf("Đề xuất bảo trì %s — provider %s (chỉ 1 luồng active hoặc không có backup healthy)", product, provider)
+func MaintenanceDetail(product, provider string, reasons []string, healthyProviders []string) string {
+	healthyStr := ""
+	if len(healthyProviders) > 0 {
+		healthyStr = fmt.Sprintf(" (chỉ còn luồng %s active)", strings.Join(healthyProviders, ", "))
+	} else {
+		healthyStr = " (không có backup healthy)"
+	}
+	msg := fmt.Sprintf("Đề xuất bảo trì %s — provider %s%s", product, provider, healthyStr)
 	if len(reasons) > 0 {
 		msg += ". " + reasons[0]
 	}

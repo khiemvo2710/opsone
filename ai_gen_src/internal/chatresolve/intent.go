@@ -134,16 +134,11 @@ func IsMaintenanceScopeQuery(msg string) bool {
 // ShouldLookupMetrics decides whether to query metrics for chat direct reply.
 func ShouldLookupMetrics(userMsg string, hist []HistoryTurn) bool {
 	if IsMetricsQuery(userMsg) {
-		return true
-	}
-	if ExtractProductFromText(userMsg) == "" && ExtractSKUFromText(userMsg) == "" {
-		return false
-	}
-	for i := len(hist) - 1; i >= 0; i-- {
-		if hist[i].Role != "user" {
-			continue
+		// Only trigger direct metrics if we have a product in current msg OR history
+		if ExtractProductFromText(userMsg) != "" {
+			return true
 		}
-		if IsMetricsQuery(hist[i].Content) {
+		if ExtractProductFromHistory(hist) != "" {
 			return true
 		}
 	}
@@ -186,12 +181,9 @@ func ShouldLookupMaintenance(userMsg string, hist []HistoryTurn) bool {
 	return false
 }
 
-// ExtractProductFromHistory scans recent user turns for a product_code.
+// ExtractProductFromHistory scans recent turns (user or assistant) for a product_code.
 func ExtractProductFromHistory(hist []HistoryTurn) string {
 	for i := len(hist) - 1; i >= 0; i-- {
-		if hist[i].Role != "user" {
-			continue
-		}
 		if code := ExtractProductFromText(hist[i].Content); code != "" {
 			return code
 		}
@@ -199,12 +191,9 @@ func ExtractProductFromHistory(hist []HistoryTurn) string {
 	return ""
 }
 
-// ExtractSKUFromHistory scans recent user turns for a denomination.
+// ExtractSKUFromHistory scans recent turns (user or assistant) for a denomination.
 func ExtractSKUFromHistory(hist []HistoryTurn) string {
 	for i := len(hist) - 1; i >= 0; i-- {
-		if hist[i].Role != "user" {
-			continue
-		}
 		if sku := ExtractSKUFromText(hist[i].Content); sku != "" {
 			return sku
 		}
