@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opsone/internal/catalog"
+	"opsone/internal/config"
 	"opsone/internal/domain"
 	"opsone/internal/notify"
 	"opsone/internal/store"
@@ -15,14 +16,30 @@ import (
 
 // Runner executes Agent Core pipeline: collect context per routing_mode (§3, Phase 3).
 type Runner struct {
-	DB        *store.DB
-	Collector *Collector
-	Notify    *notify.Service
+	DB           *store.DB
+	Collector    *Collector
+	Notify       *notify.Service
+	DashboardURL string // Public URL for email deep-links (from DASHBOARD_URL env)
 }
 
 // NewRunner creates the agent core runner.
-func NewRunner(db *store.DB, n *notify.Service) *Runner {
-	return &Runner{DB: db, Collector: NewCollector(db, n), Notify: n}
+// n and cfg are optional (nil/zero-value safe) — useful in tests.
+func NewRunner(db *store.DB, args ...any) *Runner {
+	var n *notify.Service
+	var dashURL = "http://localhost:5173"
+	for _, a := range args {
+		switch v := a.(type) {
+		case *notify.Service:
+			n = v
+		case notify.Service:
+			n = &v
+		case config.Config:
+			if v.DashboardURL != "" {
+				dashURL = v.DashboardURL
+			}
+		}
+	}
+	return &Runner{DB: db, Collector: NewCollector(db, n), Notify: n, DashboardURL: dashURL}
 }
 
 // RunOnce executes one agent cycle: collect → persist history/health/state.
@@ -62,7 +79,7 @@ func (r *Runner) RunOnce(ctx context.Context) (CycleContext, error) {
 		return CycleContext{}, err
 	}
 
-	reasoner := NewReasoner(r.DB, r.Notify)
+	reasoner := NewReasoner(r.DB, r.Notify, r.DashboardURL)
 	productCtxs, err = reasoner.Process(ctx, cycleID, productCtxs)
 	if err != nil {
 		_ = r.DB.FailAnalysisCycle(ctx, cycleID, time.Now())
@@ -124,6 +141,9 @@ func (r *Runner) RunOnce(ctx context.Context) (CycleContext, error) {
 
 	// Send notifications for breaches
 	go func() {
+		if r.Notify == nil {
+			return
+		}
 		for _, pc := range productCtxs {
 			// Check product-level threshold
 			th, _ := r.DB.GetProductThreshold(context.Background(), pc.Product.ProductCode)
@@ -134,16 +154,20 @@ func (r *Runner) RunOnce(ctx context.Context) (CycleContext, error) {
 				}
 				
 				if th.AlertEmailEnabled {
-					action := "Đang theo dõi"
+					action := "Đang theo dõi — chưa đủ điều kiện can thiệp tự động"
 					if sc.Threshold.ShouldAct {
 						action = "Đang xử lý: " + sc.Threshold.SuggestedAction
 					}
-					
+					deepLink := fmt.Sprintf("%s/dashboard?product=%s", r.DashboardURL, pc.Product.ProductCode)
+					// Hourly dedup bucket: at most 1 breach email per scope per hour.
+					hourBucket := time.Now().UTC().Format("2006010215")
+					dedupeKey := fmt.Sprintf("%s:%s:%s:breach:%s", pc.Product.ProductCode, sc.ProviderCode, sc.SKUCode, hourBucket)
+
 					_ = r.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
 						Product:       pc.Product.Label,
 						Provider:      sc.ProviderCode,
 						SKU:           sc.SKUCode,
-						HealthStatus:  pc.HealthStatus, // Use product health as context
+						HealthStatus:  pc.HealthStatus,
 						TriggerEvent:  "breach",
 						SuccessRate:   sc.Metrics.SuccessRate,
 						PendingRate:   sc.Metrics.PendingRate,
@@ -151,6 +175,8 @@ func (r *Runner) RunOnce(ctx context.Context) (CycleContext, error) {
 						BreachReasons: sc.Threshold.BreachReasons,
 						ActionSummary: action,
 						CycleID:       &cycleID,
+						DeepLinkURL:   deepLink,
+						DedupeKey:     dedupeKey,
 					})
 				}
 			}
@@ -161,18 +187,91 @@ func (r *Runner) RunOnce(ctx context.Context) (CycleContext, error) {
 		return result, err
 	}
 
+	// Baseline anomaly check (log only — no breach override)
+	go func() {
+		bctx, bcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer bcancel()
+		for _, pc := range productCtxs {
+			for _, sc := range pc.Scopes {
+				if sc.Metrics == nil || sc.Skipped {
+					continue
+				}
+				baseline, err := r.DB.GetBaseline(bctx, sc.ProductCode, sc.SKUCode, sc.ProviderCode)
+				if err != nil || baseline == nil {
+					continue
+				}
+				dev, ok := store.BaselineDeviation(sc.Metrics.SuccessRate, baseline)
+				if ok && dev >= 3.0 {
+					log.Printf("ANOMALY %s/%s/%s: success=%.1f%% baseline=%.1f%% dev=%.1f σ",
+						sc.ProductCode, sc.SKUCode, sc.ProviderCode,
+						sc.Metrics.SuccessRate, baseline.AvgSuccessRate, dev)
+				}
+			}
+		}
+	}()
+
+	// Auto-recovery verification
+	go r.checkPendingRecoveries(context.Background())
+
+	// Baseline aggregation: run every 60 cycles (≈ every hour when interval=1min)
+	if cycleID%60 == 0 {
+		go func() {
+			bctx, bcancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer bcancel()
+			job := &BaselineJob{DB: r.DB}
+			job.RunOnce(bctx)
+		}()
+	}
+
 	log.Printf("agent core: cycle=%d products=%d history=%d health=%s decision=%s",
 		cycleID, len(productCtxs), len(historyRows), cycleHealth, decision)
 	return result, nil
 }
 
+// checkPendingRecoveries verifies pending routing action outcomes.
+func (r *Runner) checkPendingRecoveries(ctx context.Context) {
+	pending, err := r.DB.ListPendingVerify(ctx)
+	if err != nil || len(pending) == 0 {
+		return
+	}
+	for _, v := range pending {
+		postSuccess, postPending, found := r.DB.FindCurrentMetricsForScope(ctx, v.ProductCode, v.SKUCode)
+		if !found {
+			continue
+		}
+		status := "no_change"
+		if postSuccess-v.PreSuccessRate >= 3.0 {
+			status = "improved"
+		} else if v.PreSuccessRate-postSuccess >= 5.0 {
+			status = "degraded"
+		}
+		escalated := status == "degraded"
+		if err := r.DB.UpdateVerifyResult(ctx, v.ID, postSuccess, postPending, status, escalated); err != nil {
+			log.Printf("recovery_verify: update error: %v", err)
+			continue
+		}
+		if escalated {
+			log.Printf("RECOVERY_FAILED: %s/%s post=%.1f%% pre=%.1f%% — escalating",
+				v.ProductCode, v.SKUCode, postSuccess, v.PreSuccessRate)
+			_ = r.Notify.SendIfNeeded(ctx, notify.EmailParams{
+				Product:       v.ProductCode,
+				SKU:           v.SKUCode,
+				HealthStatus:  "red",
+				TriggerEvent:  "recovery_failed",
+				SuccessRate:   postSuccess,
+				PendingRate:   postPending,
+				ActionSummary: fmt.Sprintf("Routing thay đổi KHÔNG cải thiện: thành công %.0f%% → %.0f%%", v.PreSuccessRate, postSuccess),
+				DedupeKey:     fmt.Sprintf("recovery_fail:%s:%s:%d", v.ProductCode, v.SKUCode, v.ID),
+			})
+		}
+	}
+}
+
 // RunBlocking runs scheduler until ctx cancelled; skips overlapping runs.
 func (r *Runner) RunBlocking(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
-		interval = 5 * time.Minute
+		interval = 1 * time.Minute
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 
 	running := make(chan struct{}, 1)
 	run := func() {
@@ -189,12 +288,19 @@ func (r *Runner) RunBlocking(ctx context.Context, interval time.Duration) error 
 		}
 	}
 
+	// Run immediately on startup, then re-read interval from DB each tick.
 	run()
 	for {
+		// Re-read interval from DB so UI changes take effect without restart.
+		if settings, err := r.DB.GetAgentSettings(ctx); err == nil {
+			if d := IntervalFromSettings(settings); d > 0 {
+				interval = d
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-time.After(interval):
 			run()
 		}
 	}

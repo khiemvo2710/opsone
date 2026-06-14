@@ -3984,22 +3984,25 @@ Khi nhóm SKU cùng `product_code` (`routing_mode=sku`, ≥2 dòng SKU) — ô *
 
 **Navigation (`Layout.tsx`):** Menu **tab ngang trên header** — Dashboard · Sự cố · Bảo trì · Cấu hình (không còn sidebar trái). **Logo ZaloPay** (32×32) cạnh chữ **OpsOne**; badge 🟢🟡🔴 global cạnh brand. **Favicon** tab trình duyệt: `web/public/favicon.png` (logo ZaloPay).
 
-**Chat (`ChatWidget.tsx` + `useChatDock.ts` + `useVoiceInput.ts` + `useOpsOneWake.ts`):** Widget nổi panel **~800×780px** (mobile ~full width / 88vh); nhãn bubble assistant **OpsOne**; nhãn user **Anh/Chị + tên** (`userBubbleLabel`, §9.2.1); phản hồi AI full-width, `pre-wrap`; **một vùng scroll** trên feed. **Kéo** nút Chat hoặc header để **dock** 4 góc; resize 4 góc (`useChatResize`); vị trí `localStorage` (`opsone-chat-corner`). **Enter** gửi, **Shift+Enter** xuống dòng. **Nhận diện danh tính (identity detection)** client-only khi user tự nói tên/xưng hô — §9.2.1. **Voice** `vi-VN`: wake **`alo`** (§9.2); Mic toggle; im lặng **2s** → gửi kèm `input_source: voice`, `stt_raw` §7.6.5.5; *đóng chat* (mic vẫn bật); *tắt mic* / *bye bye* (tắt mic + đóng chat). Cần **click/tap một lần** trên trang trước wake nền. Không route `/chat` riêng.
+**Chat (`ChatWidget.tsx` + `useChatDock.ts` + `useVoiceInput.ts` + `useOpsOneWake.ts`):** Widget nổi panel **~800×780px** (mobile ~full width / 88vh); nhãn bubble assistant **OpsOne**; nhãn user từ **tên đăng nhập** (`userBubbleLabel`); phản hồi AI full-width, `pre-wrap`; **một vùng scroll** trên feed. **Kéo** nút Chat hoặc header để **dock** 4 góc; resize 4 góc (`useChatResize`); vị trí `localStorage` (`opsone-chat-corner`). **Enter** gửi, **Shift+Enter** xuống dòng. **Lịch sử chat** lưu `localStorage` theo user (`opsone_chat_{name}`) — tải lại khi mở; xóa khi logout. **Voice** `vi-VN` §9.2; Mic toggle; nút Mic luôn hiện khi browser hỗ trợ; im lặng **2s** → gửi kèm `input_source: voice`, `stt_raw` §7.6.5.5. Cần **click/tap một lần** trên trang trước wake nền. Không route `/chat` riêng.
 
-#### 9.2.1 Tự động nhận diện danh tính & avatar (Identity Detection)
+#### 9.2.1 Mock Login & Avatar
 
-**Code:** `chatIntro.ts`, `chatOnboarding.ts`, `chatUserProfile.ts`, `ChatAvatar.tsx`; `web/public/chat-avatars.png` (sprite **7×4**), `favicon-64.png` (avatar OpsOne).
+**Code:** `AuthContext.tsx`, `LoginPage.tsx`, `ChatAvatar.tsx`; `web/public/chat-avatars.png` (sprite **7×4**), `favicon-64.png` (avatar OpsOne).
 
-**Mở chat:** OpsOne gửi lời chào đơn giản — giới thiệu khả năng hỗ trợ metrics/sự cố/routing. **Không chủ động hỏi tên.**
+**Trang login giả lập** (thay O365 trong môi trường dev — `VITE_DEV_AUTH_BYPASS=true`):
+- Nhập **tên** (≥2 ký tự) → avatar preview live (`inferProfileFromSingleMessage` → `ChatAvatar`).
+- Checkbox **Cho phép mic** (mặc định bật) — quyết định `micAllowed` session.
+- Submit → lưu `{ name, micAllowed }` vào `localStorage` (`opsone_mock_session`).
+- Nút **Đăng xuất** ở header → xóa session + xóa lịch sử chat của user → về trang login.
 
-**Nhận diện danh tính:**
-- Agent chỉ cập nhật xưng hô/tên khi user **tự giới thiệu** hoặc nói lệnh kèm tên (vd: "Anh Khiêm đây", "Ghi nhận cho anh Tuấn nhé", "Tôi là Lan Anh").
-- Khi phát hiện thông tin định danh mới (`inferProfileFromSingleMessage`), Agent phản hồi xác nhận và cập nhật avatar ngay lập tức.
-- **Tuổi không bắt buộc:** suy từ lời nói (nếu có) để chọn avatar, mặc định là **trung niên**.
+**Profile cố định từ login:** Avatar + xưng hô suy từ tên lúc đăng nhập (`inferProfileFromSingleMessage`), **không cập nhật** trong chat. Mọi tin nhắn đều gửi thẳng backend.
 
-**Nhãn bubble:** `Anh Khiêm` / `Chị Lan` — giữ **dấu tiếng Việt**; sửa ASR (`ăn`→`anh`). Không hiển thị *Ten Khiem* / chữ *tên* trong nhãn.
+**Header:** hiện avatar nhỏ (28×28) + tên + nút **Đăng xuất** góc phải.
 
-**Avatar:** silhouette xám → sprite `(gender, ageGroup)` khi user tự định danh; OpsOne = favicon.
+**Actor API:** `X-OpsOne-Actor: {name}` / `X-OpsOne-Role: admin` đọc từ session localStorage.
+
+**O365 thật (production):** xem §2.6 — cần `VITE_AAD_*` + backend OIDC verifier.
 
 #### 9.2.2 Tự động mở chat khi có đề xuất mới (Auto-chat-open)
 
@@ -4176,27 +4179,27 @@ UI là **mặt tiếp xúc với người vận hành** — dùng được trên
 **Voice (micro) — hội thoại liên tục + wake:**
 
 ```text
-[Nền — sau 1 lần click trang]  nói "alo" hoặc "bật mic"  →  Mở chat + bật Mic ●
-[Bấm Mic]  →  Bật session (Mic ●)  →  STT vi-VN continuous
-              "Anh Khiêm 32 tuổi"   (tự định danh — §9.2.1)
-              (im lặng 2 giây → xác nhận danh tính & cập nhật avatar)
-              "Cho tôi biết ESALE ZING hôm nay thế nào"
-              (im lặng 2 giây → gửi câu tiếp…)
-Nói "đóng chat"     →  Thu gọn panel (mic VẪN bật)
-Nói "tắt mic" / "bye bye"  →  Tắt mic + đóng chat
+[Nền — sau 1 lần click trang]
+  nói "alo" / "mở chat" / "bật mic"  →  Mở chat + bật Mic ●
+
+[Mic ON — chat mở]  →  STT vi-VN continuous
+  "Cho tôi biết ESALE ZING hôm nay thế nào"
+  (im lặng 2 giây → gửi câu tiếp…)
+  nói "alo" / "mở chat"  →  focus chat (mic đã on, không restart)
+
+Nói "đóng chat" / "tắt mic" / "bye bye"  →  Tắt mic + đóng chat (hành vi như nhau)
 [Bấm Mic lần nữa]  →  Tắt session
 ```
 
 **Yêu cầu voice (`useVoiceInput.ts` + `useOpsOneWake.ts`):**
 
-- **Wake word / bật mic:** `alo` (và biến thể STT: `a lo`, `allo`, `alo ơi`, …) hoặc **`bật mic` / `mở mic`** (`VOICE_MIC_ON_PHRASES`) — listener nền khi chat đóng + mic tắt + đã `speechPrimed`.
-- Nút **Mic** = **toggle**: `micOn` — idle (`Mic`) / đang nghe (`Mic ●`); tắt session: bấm Mic lại **hoặc** lệnh thoại (`VOICE_END_SESSION_PHRASES`).
-- **Đóng chat (không tắt mic):** `đóng chat`, `thu gọn chat`, `ẩn chat`, … (`VOICE_CLOSE_CHAT_PHRASES`).
-- **Kết thúc session:** `tắt mic`, `tắt micro`, `bye bye`, `bye` (`VOICE_END_SESSION_PHRASES`) → tắt mic **và** đóng chat.
+- **Wake word — mở chat + bật mic:** `alo` (và biến thể `a lo`, `allo`, …) hoặc **`mở chat` / `bật mic` / `mở mic` / …** (`VOICE_MIC_ON_PHRASES`) — listener nền (`useOpsOneWake`) khi mic tắt + đã `speechPrimed`; trong session mic (`useVoiceInput`) cũng detect → gọi `onMicOn` → mở chat.
+- **`micAllowed` (từ login):** quyết định có bật wake listener + auto-prime không; **nút Mic luôn hiển thị** khi browser hỗ trợ STT — user có thể bật thủ công dù bỏ check ở login.
+- Nút **Mic** = **toggle**: `micOn` — idle (`Mic`) / đang nghe (`Mic ●`); hint *Mic bật · im lặng 2s gửi · "đóng chat" / "tắt mic"* hiển thị khi `micOn`.
+- **Đóng/kết thúc session (hành vi giống nhau):** `đóng chat` / `tắt mic` / `tắt micro` / `bye bye` / `bye` → **tắt mic + đóng chat**.
 - Hiển thị **bản ghi nhận dạng giọng** trong ô nhập khi đang nghe; user sửa được nếu STT sai trước khi im lặng đủ 2s.
-- **Tự gửi từng câu:** `VOICE_SILENCE_MS = 2000` — reset timer mỗi lần STT cập nhật; hết 2s → gửi; **xóa ô nhập**; **khởi động lại session STT** (~80ms) sau gửi để Chrome không ghép transcript câu trước.
-- **Session liên tục:** `micSessionRef` giữ true; `onend`/`onerror` → `spawnRecognition()` với **epoch** (bỏ event cũ), `abort()` session trước; **watchdog** 5s — nếu >12s không `onresult` → restart.
-- Chặn `onresult` cũ sau gửi (`ignoreResultsUntil` ~800ms).
+- **Tự gửi từng câu:** `VOICE_SILENCE_MS = 2000` — reset timer mỗi lần STT cập nhật; hết 2s → gửi; **xóa ô nhập**; **khởi động lại session STT** (~80ms) sau gửi.
+- **Session liên tục:** `micSessionRef` giữ true; `onend`/`onerror` → `spawnRecognition()` với **epoch**; **watchdog** 5s — nếu >12s không `onresult` → restart.
 - Gợi ý header chat: *Nói "alo" hoặc "bật mic" để mở chat + bật mic · "đóng chat" · "tắt mic" / "bye bye" để thoát.*
 - Fallback: trình duyệt không hỗ trợ STT → ẩn micro, chỉ dùng chat.
 - Ngôn ngữ: **tiếng Việt bắt buộc** (§2.5); STT Web Speech API `vi-VN`.
@@ -4542,7 +4545,7 @@ Bảo trì
 | Trường UI          | Kiểu             | Mặc định               | Mô tả                                                                          |
 | ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------------ |
 | **Bật email**      | Toggle           | Bật                    | `notification_enabled`                                                         |
-| **Người nhận**     | Tags input email | `ops-team@company.com` | JSON array — team vận hành                                                     |
+| **Người nhận**     | Tags input email | `khiemvt@vng.com.vn` | JSON array — team vận hành                                                     |
 | **Gửi khi 🔴**     | Toggle           | Bật                    | `notification_on_red_only` — nếu tắt, gửi cả vàng khi vượt ngưỡng pending/fail |
 | **Ngưỡng pending** | %                | `15`                   | `notification_pending_threshold`                                               |
 | **Ngưỡng fail**    | %                | `10`                   | `notification_fail_threshold`                                                  |
@@ -4877,7 +4880,7 @@ WHERE p.product_code = 'ZING' AND pr.provider_code = 'IMEDIA';
 
 **Tình huống A — Routing + pending cao:** TOPUP_VINA ESALE suy giảm; OpsOne tự động điều phối routing; vẫn 🔴 (pending 18%).
 
-1. Cấu hình §9.5.5: `notification.enabled=true`, recipients có `ops-team@company.com`.
+1. Cấu hình §9.5.5: `notification.enabled=true`, recipients có `khiemvt@vng.com.vn`.
 2. `provider_chat_escalation` ESALE: Teams / `[OpsOne] ESALE Support` / `@esale-oncall`.
 3. **10:10** — UpdateRouting applied; `health_status=red`, pending ≥ 15%.
 4. **Verify email** (MailHog hoặc `notification_log`) — **toàn bộ tiếng Việt**:
@@ -5789,7 +5792,7 @@ ON DUPLICATE KEY UPDATE
 ### 13.10 Seed mẫu (rút gọn)
 
 ```sql
-INSERT INTO agent_settings (id, notification_recipients, agent_locale) VALUES (1, '["ops-team@company.com"]', 'vi-VN');
+INSERT INTO agent_settings (id, notification_recipients, agent_locale) VALUES (1, '["khiemvt@vng.com.vn"]', 'vi-VN');
 
 INSERT INTO providers (provider_code, label) VALUES
   ('ESALE','ESALE'), ('IMEDIA','IMEDIA'), ('SHOPPAY','SHOPPAY');

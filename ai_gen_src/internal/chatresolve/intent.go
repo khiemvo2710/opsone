@@ -80,6 +80,38 @@ func ExtractProductFromText(msg string) string {
 	return ""
 }
 
+// serviceQualifiers are tokens that unambiguously identify a service type alongside a carrier name.
+// If none of these appear, a bare carrier name (e.g. "Mobifone") is ambiguous.
+var serviceQualifiers = []string{
+	"topup", "top up", "nap tien", "naptien", "nạp tiền", "nạp",
+	"nap ", "nap$", // "nap" followed by space/end to avoid matching "napkin" etc.
+	"the ", "thẻ ", "thẻ", "the$", "card",
+	"data",
+}
+
+// carrierAmbiguousProducts is the set of products that could match a bare carrier token.
+var carrierAmbiguousProducts = map[string]bool{
+	"TOPUP_MOBI": true, "TOPUP_VINA": true, "TOPUP_VIETTEL": true,
+	"DATA_MOBI": true, "DATA_VINA": true, "DATA_VIETTEL": true,
+	"MOBIFONE": true, "VINAPHONE": true, "VIETTEL": true,
+}
+
+// IsAmbiguousCarrierProduct reports true when the resolved product could match multiple
+// carrier service types (topup / thẻ / data) and the message contains no qualifier to
+// disambiguate. The caller should ask the user to clarify instead of guessing.
+func IsAmbiguousCarrierProduct(msg, resolvedProduct string) bool {
+	if !carrierAmbiguousProducts[resolvedProduct] {
+		return false
+	}
+	key := NormalizeKey(msg) + " " // trailing space so "nap " matches at end of word
+	for _, q := range serviceQualifiers {
+		if strings.Contains(key, q) {
+			return false
+		}
+	}
+	return true
+}
+
 var globalMaintenanceTokens = []string{
 	"ngoai ra", "ngoài ra",
 	"con dich vu", "còn dịch vụ", "con loai dich vu", "còn loại dịch vụ",

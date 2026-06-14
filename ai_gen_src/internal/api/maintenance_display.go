@@ -21,31 +21,26 @@ func activeRoutingProviders(routing map[string]float64) []string {
 }
 
 // maintenanceOverview builds the dashboard maintenance chip.
-// Providers at 0% routing are omitted. When every traffic-bearing provider is in
-// maintenance, scope_level is true (SKU/service maintenance).
+// All providers with active maintenance windows are included regardless of routing %.
+// scope_level is true when ALL providers in routing are under maintenance.
 func maintenanceOverview(
 	mws []store.MaintenanceRow,
 	routing map[string]float64,
 	sku string,
 	now time.Time,
 ) map[string]any {
-	active := activeRoutingProviders(routing)
-	if len(active) == 0 || len(mws) == 0 {
+	if len(mws) == 0 {
 		return nil
 	}
-	activeSet := make(map[string]struct{}, len(active))
-	for _, p := range active {
-		activeSet[p] = struct{}{}
-	}
+
+	// Total provider count (for scope_level determination).
+	totalProviders := len(routing)
 
 	relevant := make([]store.MaintenanceRow, 0, len(mws))
-	maintained := make([]string, 0, len(active))
+	maintained := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, m := range mws {
 		if m.EndsAt.Before(now) || m.StartsAt.After(now) {
-			continue
-		}
-		if _, ok := activeSet[m.ProviderCode]; !ok {
 			continue
 		}
 		relevant = append(relevant, m)
@@ -76,7 +71,7 @@ func maintenanceOverview(
 		}
 	}
 
-	scopeLevel := len(maintained) >= len(active)
+	scopeLevel := totalProviders > 0 && len(maintained) >= totalProviders
 	providerCode := ""
 	switch {
 	case scopeLevel:

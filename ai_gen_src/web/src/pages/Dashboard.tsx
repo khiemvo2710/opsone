@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useToast } from '../context/ToastContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiClientError } from '../api/client';
@@ -29,7 +29,7 @@ import type {
   ScopeMaintenanceActionPayload,
 } from '../components/ActiveMaintenanceCell';
 import { useOverallHealth } from '../hooks/useOverallHealth';
-import { RedSkuScrollNav } from '../components/RedSkuScrollNav';
+import { useScrollNav } from '../context/ScrollNavContext';
 import {
   effectiveRowHealth,
   rowPendingApprove,
@@ -173,6 +173,12 @@ export function Dashboard() {
   const thresholdsByProduct = useProductThresholds(productCodes, overview?.thresholds);
 
   const filteredRows = rowsByService[serviceTab] ?? [];
+
+  // Sync red-SKU scroll nav data into context so ChatWidget can render it
+  const scrollNav = useScrollNav();
+  useEffect(() => {
+    scrollNav.setData(filteredRows, thresholdsByProduct);
+  }, [filteredRows, thresholdsByProduct]); // eslint-disable-line react-hooks/exhaustive-deps
   const overviewRows = () =>
     qc.getQueryData<DashboardOverview>(['dashboard-overview'])?.rows ?? overview?.rows;
   const scopeDisplayName = (productCode: string, skuCode: string) =>
@@ -730,14 +736,6 @@ export function Dashboard() {
 
   return (
     <div className="page dashboard">
-      <section className="page__hero">
-        <h1>Dashboard</h1>
-        <div className="hero-health">
-          <HealthBadge status={overallHealth.status} label={overallHealth.label} size="lg" />
-          {overallHealth.summary && <p>{overallHealth.summary}</p>}
-        </div>
-      </section>
-
       <section className="page__section page__section--routing">
         <div className="section-head section-head--dashboard">
           <nav className="service-tabs" aria-label="Loai dich vu">
@@ -764,6 +762,12 @@ export function Dashboard() {
             })}
           </nav>
           <div className="section-head__aside">
+            <div className="section-head__health">
+              <HealthBadge status={overallHealth.status} compact size="sm" />
+              {overallHealth.summary && (
+                <span className="section-head__health-summary muted">{overallHealth.summary}</span>
+              )}
+            </div>
             {overview?.updated_at && (
               <p className="section-head__meta muted">
                 Cập nhật: {new Date(overview.updated_at).toLocaleString('vi-VN')} · tự làm mới mỗi 60 giây
@@ -772,7 +776,6 @@ export function Dashboard() {
             )}
           </div>
         </div>
-        <RedSkuScrollNav rows={filteredRows} thresholdsByProduct={thresholdsByProduct} />
         {overviewLoading ? (
           <p className="loading">Đang tải bảng routing…</p>
         ) : (

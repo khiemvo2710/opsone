@@ -58,7 +58,14 @@ func (s *Server) routes() {
 	mux.HandleFunc("/api/v1/mock/status", s.handleMockStatus)
 	mux.HandleFunc("/api/v1/mock/generate", s.handleMockGenerate)
 	mux.HandleFunc("/api/v1/chat", s.routeChat)
+	mux.HandleFunc("/api/v1/chat/feedback", s.routeChatFeedback)
+	mux.HandleFunc("/api/v1/admin/chat-patterns", s.routeAdminChatPatterns)
+	mux.HandleFunc("/api/v1/admin/chat-patterns/", s.routeAdminChatPatterns)
+	mux.HandleFunc("/api/v1/admin/few-shot", s.routeAdminFewShot)
+	mux.HandleFunc("/api/v1/admin/few-shot/", s.routeAdminFewShot)
+	mux.HandleFunc("/api/v1/admin/voice-corrections", s.handleAdminVoiceCorrectionsList)
 	mux.HandleFunc("/api/v1/events", s.handleSSE)
+	mux.HandleFunc("/api/v1/suggestions", s.handleSuggestions)
 	s.mux = mux
 }
 
@@ -303,6 +310,14 @@ func (s *Server) routeScopes(w http.ResponseWriter, r *http.Request) {
 func (s *Server) routeChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		s.handleChatPost(w, r)
+		return
+	}
+	writeError(w, http.StatusMethodNotAllowed, "method", "Method not allowed")
+}
+
+func (s *Server) routeChatFeedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.handleChatFeedback(w, r)
 		return
 	}
 	writeError(w, http.StatusMethodNotAllowed, "method", "Method not allowed")

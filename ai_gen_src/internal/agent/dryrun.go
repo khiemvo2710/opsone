@@ -43,7 +43,7 @@ func (r *DryRunner) RunOnce(ctx context.Context) (uint64, int, error) {
 // RunBlocking runs scheduler until ctx cancelled; skips overlapping runs.
 func (r *DryRunner) RunBlocking(ctx context.Context, interval time.Duration) error {
 	if interval <= 0 {
-		interval = 5 * time.Minute
+		interval = 1 * time.Minute
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -79,7 +79,7 @@ func (r *DryRunner) RunBlocking(ctx context.Context, interval time.Duration) err
 func IntervalFromSettings(settings store.AgentSettings) time.Duration {
 	m := settings.SchedulerIntervalMin
 	if m <= 0 {
-		m = 5
+		m = 1
 	}
 	return time.Duration(m) * time.Minute
 }

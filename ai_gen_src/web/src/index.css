@@ -592,13 +592,27 @@ textarea {
 }
 
 .section-head--dashboard {
-  align-items: flex-start;
+  align-items: center;
 }
 
 .section-head__aside {
   margin-left: auto;
   text-align: right;
-  max-width: min(100%, 22rem);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+
+.section-head__health {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.section-head__health-summary {
+  font-size: 0.85rem;
 }
 
 .section-head__meta {
@@ -608,10 +622,6 @@ textarea {
 }
 
 .sku-scroll-nav {
-  position: fixed;
-  right: 1rem;
-  top: 4.5rem;
-  z-index: 15;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -621,6 +631,7 @@ textarea {
   border: 1px solid var(--surface2);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  margin-bottom: 0.4rem;
 }
 
 .sku-scroll-nav__btn {
@@ -1568,19 +1579,19 @@ textarea {
 }
 
 .overview-table__scope-controls-cell .service-maint-btn {
-  width: auto;
+  width: 100%;
   max-width: 100%;
 }
 
 .overview-table__scope-controls-cell .service-maint-btn__trigger {
-  width: auto;
+  width: 100%;
   max-width: 100%;
 }
 
 .overview-table__auto-cell .scope-auto-editor--compact,
 .overview-table__scope-controls-cell .scope-auto-editor--compact,
 .overview-table__product-cell-auto .scope-auto-editor--compact {
-  align-items: flex-end;
+  align-items: stretch;
 }
 
 .overview-table__auto-cell .scope-auto-editor__summary-value,
@@ -1598,8 +1609,8 @@ textarea {
 
 .service-maint-btn__trigger {
   width: 100%;
-  justify-content: flex-start;
-  text-align: left;
+  justify-content: center;
+  text-align: center;
 }
 
 .service-maint-btn--open {
@@ -1894,10 +1905,16 @@ textarea {
 }
 
 .scope-auto-editor__actions {
-  display: flex;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.3rem;
   margin-top: 0.05rem;
+}
+
+.scope-auto-editor__actions .btn {
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
 }
 
 .scope-auto-cell {
@@ -2055,7 +2072,7 @@ textarea {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   text-align: left;
 }
 
@@ -2063,7 +2080,7 @@ textarea {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: stretch;
   align-self: flex-start;
   justify-content: flex-start;
   min-width: 7.25rem;
@@ -2145,10 +2162,16 @@ textarea {
 }
 
 .product-maint-actions__edit-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.3rem;
   width: 100%;
+}
+
+.product-maint-actions__edit-actions .btn {
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
 }
 
 .product-maint-actions__error {
@@ -2159,9 +2182,9 @@ textarea {
 
 .overview-table__product-cell--group .scope-auto-editor {
   margin-top: 0;
-  width: auto;
+  width: 100%;
   max-width: 100%;
-  align-items: flex-end;
+  align-items: stretch;
 }
 
 .overview-table__product-cell--group .scope-auto-editor--compact {
@@ -2238,17 +2261,22 @@ textarea {
 
 .overview-table__plan-row td {
   padding: 0.22rem 0.4rem;
-  background: rgba(234, 179, 8, 0.05);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(234, 179, 8, 0.13);
+  border-top: 1px solid rgba(234, 179, 8, 0.35);
+  border-bottom: 1px solid rgba(234, 179, 8, 0.35);
   overflow: visible;
   text-overflow: clip;
   vertical-align: middle;
 }
 
+.overview-table__plan-row td:first-child {
+  border-left: 3px solid rgba(234, 179, 8, 0.75);
+}
+
 .overview-table__plan-label {
   font-size: 0.78rem;
   font-weight: 600;
-  color: var(--muted);
+  color: rgb(234, 179, 8);
   padding-left: 1.25rem !important;
   white-space: nowrap;
 }
@@ -2304,7 +2332,17 @@ textarea {
 }
 
 .overview-table__restore-row td {
-  background: rgba(91, 156, 245, 0.06);
+  background: rgba(91, 156, 245, 0.12);
+  border-top: 1px solid rgba(91, 156, 245, 0.3) !important;
+  border-bottom: 1px solid rgba(91, 156, 245, 0.3) !important;
+}
+
+.overview-table__restore-row td:first-child {
+  border-left: 3px solid rgba(91, 156, 245, 0.7) !important;
+}
+
+.overview-table__restore-row .overview-table__plan-label {
+  color: rgb(91, 156, 245);
 }
 
 .overview-table__plan-actions {
@@ -3004,17 +3042,207 @@ textarea {
     height: min(88vh, 780px) !important;
     max-height: min(88vh, 780px) !important;
   }
+}
 
-  .chat-widget__resize-handle {
-    display: none;
-  }
+/* ─── Login Page ─────────────────────────────────────────────────────────── */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 1.5rem;
+}
 
-  .sku-scroll-nav {
-    top: 7.5rem;
-    right: 0.75rem;
-  }
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--surface2);
+  border-radius: var(--radius);
+  padding: 2.5rem 2rem;
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
 
-  .card-grid {
-    grid-template-columns: 1fr;
-  }
+.login-card__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.login-card__logo {
+  border-radius: 12px;
+}
+
+.login-card__title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.login-card__subtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.login-card__form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.login-card__avatar-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--surface2);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  min-height: 3rem;
+}
+
+.login-card__avatar-preview .chat-bubble__avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.login-card__avatar-hint {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.login-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.login-card__label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.login-card__input {
+  background: var(--surface2);
+  border: 1px solid #334155;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 1rem;
+  padding: 0.6rem 0.85rem;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+
+.login-card__input:focus {
+  border-color: var(--accent);
+}
+
+.login-card__input--error {
+  border-color: var(--red);
+}
+
+.login-card__error {
+  font-size: 0.8rem;
+  color: var(--red);
+}
+
+.login-card__checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  cursor: pointer;
+}
+
+.login-card__mic-warning {
+  font-size: 0.8rem;
+  color: var(--yellow, #f59e0b);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.login-card__checkbox {
+  width: 17px;
+  height: 17px;
+  margin-top: 2px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.login-card__checkbox-label {
+  font-size: 0.875rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.login-card__btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  width: 100%;
+  margin-top: 0.25rem;
+}
+
+.login-card__btn:hover {
+  background: var(--accent-hover);
+}
+
+/* ─── Header User ────────────────────────────────────────────────────────── */
+.app-header__user {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.app-header__user-avatar {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.app-header__user-avatar .chat-bubble__avatar {
+  width: 28px;
+  height: 28px;
+}
+
+.app-header__user-name {
+  font-size: 0.85rem;
+  color: var(--text);
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-header__logout-btn {
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.app-header__logout-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
 }

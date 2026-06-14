@@ -7,11 +7,14 @@ import (
 	"strings"
 
 	"opsone/internal/agent"
+	"opsone/internal/notify"
+	"opsone/internal/store"
 	"opsone/internal/tools"
 )
 
 // getPendingSuggestionsForSSE returns pending routing plans and maintenance suggestions.
-// Used to trigger auto-chat notifications.
+// Each routing plan includes auto_action from routing_scope_state so the frontend
+// can differentiate "needs approval" (recommend_only) from "auto-handled" (auto/time_window).
 func (s *Server) getPendingSuggestionsForSSE(ctx context.Context) (map[string]any, error) {
 	plans, err := s.DB.ListPendingRoutingPlansPerScope(ctx)
 	if err != nil {
@@ -21,6 +24,9 @@ func (s *Server) getPendingSuggestionsForSSE(ctx context.Context) (map[string]an
 	if err != nil {
 		return nil, err
 	}
+
+	// Fetch scope auto_action map (product+sku → auto_action) for classifying plans.
+	scopeAutoMap, _ := s.DB.ListScopeAutoConfig(ctx) // best-effort; empty map on error
 
 	result := map[string]any{
 		"routing_plans":           make([]map[string]any, 0),
@@ -38,6 +44,16 @@ func (s *Server) getPendingSuggestionsForSSE(ctx context.Context) (map[string]an
 			"status":       p.Status,
 			"plan_id":      p.ID,
 		}
+		// Include auto_action so frontend knows if this needs human approval.
+		autoAction := "recommend_only" // safe default
+		if cfg, ok := scopeAutoMap[store.ScopeAutoMapKey(p.ProductCode, p.SKUCode)]; ok {
+			autoAction = cfg.AutoAction
+		} else if cfg, ok := scopeAutoMap[store.ScopeAutoMapKey(p.ProductCode, "")]; ok {
+			// Fall back to product-level config
+			autoAction = cfg.AutoAction
+		}
+		item["auto_action"] = autoAction
+
 		var parsed struct {
 			ProposedPct map[string]float64 `json:"proposed_pct"`
 			ReasonVI    string             `json:"reason_vi"`
@@ -69,51 +85,69 @@ func (s *Server) getPendingSuggestionsForSSE(ctx context.Context) (map[string]an
 	return result, nil
 }
 
+// isAutoMode reports whether auto_action means the system handles this automatically.
+func isAutoMode(autoAction string) bool {
+	return autoAction == "auto" || autoAction == "time_window"
+}
+
 // formatSuggestionSystemMessage builds a system message for auto-opened chat with pending suggestions.
+// Plans with auto_action=auto/time_window are shown as "system handled"; others as "needs approval".
 func formatSuggestionSystemMessage(suggestions map[string]any) string {
 	if !getBool(suggestions, "has_suggestions") {
 		return ""
 	}
 
-	var lines []string
-	lines = append(lines, "📢 **Có việc mới cần xử lý!**\n")
+	plans, _ := suggestions["routing_plans"].([]map[string]any)
+	maintenance, _ := suggestions["maintenance_suggestions"].([]map[string]any)
 
-	// Add routing plans
-	if plans, ok := suggestions["routing_plans"].([]map[string]any); ok && len(plans) > 0 {
-		lines = append(lines, "🔄 **Đề xuất Routing:** (Thay đổi phân phối traffic)")
-		for i, p := range plans {
+	// Separate routing plans into auto-handled vs needs-approval
+	var autoPlans, manualPlans []map[string]any
+	for _, p := range plans {
+		if isAutoMode(strAny(p, "auto_action")) {
+			autoPlans = append(autoPlans, p)
+		} else {
+			manualPlans = append(manualPlans, p)
+		}
+	}
+
+	var lines []string
+
+	// ── Auto-handled plans ──────────────────────────────────────────────────
+	if len(autoPlans) > 0 {
+		lines = append(lines, "🤖 **Hệ thống đã tự động điều phối routing**\n")
+		lines = append(lines, "🔄 **Chi tiết:**")
+		for i, p := range autoPlans {
 			if i >= 3 {
-				lines = append(lines, fmt.Sprintf("   • ...và %d kế hoạch khác", len(plans)-3))
+				lines = append(lines, fmt.Sprintf("   • ...và %d thay đổi khác", len(autoPlans)-3))
 				break
 			}
-			productCode := strAny(p, "product_code")
-			skuCode := strAny(p, "sku_code")
-			reasonVI := strAny(p, "reason_vi")
-			pctStr := ""
-			if proposed, ok := p["proposed_pct"].(map[string]any); ok {
-				parts := make([]string, 0)
-				for provider := range proposed {
-					parts = append(parts, fmt.Sprintf("%s: %.0f%%", provider, getFloat(proposed, provider)))
-				}
-				if len(parts) > 0 {
-					pctStr = " → " + strings.Join(parts, " / ")
-				}
+			lines = append(lines, "   • "+formatPlanDetail(p))
+		}
+		lines = append(lines, "")
+		lines = append(lines, "💡 Gõ \"xem metric\" để kiểm tra chỉ số sau routing")
+		lines = append(lines, "")
+	}
+
+	// ── Plans needing approval ───────────────────────────────────────────────
+	if len(manualPlans) > 0 {
+		lines = append(lines, "📢 **Có đề xuất routing cần duyệt**\n")
+		lines = append(lines, "🔄 **Đề xuất Routing:**")
+		for i, p := range manualPlans {
+			if i >= 3 {
+				lines = append(lines, fmt.Sprintf("   • ...và %d kế hoạch khác", len(manualPlans)-3))
+				break
 			}
-			detail := fmt.Sprintf("%s/%s%s", productCode, skuCode, pctStr)
-			if reasonVI != "" {
-				detail += fmt.Sprintf(" (%s)", reasonVI)
-			}
-			lines = append(lines, fmt.Sprintf("   • %s", detail))
+			lines = append(lines, "   • "+formatPlanDetail(p))
 		}
 		lines = append(lines, "")
 	}
 
-	// Add maintenance suggestions
-	if items, ok := suggestions["maintenance_suggestions"].([]map[string]any); ok && len(items) > 0 {
-		lines = append(lines, "🔧 **Đề xuất Bảo trì:**")
-		for i, m := range items {
+	// ── Maintenance suggestions ─────────────────────────────────────────────
+	if len(maintenance) > 0 {
+		lines = append(lines, "🔧 **Đề xuất Bảo trì cần duyệt:**")
+		for i, m := range maintenance {
 			if i >= 3 {
-				lines = append(lines, fmt.Sprintf("   • ...và %d bảo trì khác", len(items)-3))
+				lines = append(lines, fmt.Sprintf("   • ...và %d bảo trì khác", len(maintenance)-3))
 				break
 			}
 			productCode := strAny(m, "product_code")
@@ -128,11 +162,35 @@ func formatSuggestionSystemMessage(suggestions map[string]any) string {
 		lines = append(lines, "")
 	}
 
-	lines = append(lines, "💡 **Hành động:**")
-	lines = append(lines, "   • Gõ \"xem pending\" để xem chi tiết")
-	lines = append(lines, "   • Admin: duyệt/từ chối ngay hoặc vào Dashboard")
+	// ── Action footer — only when manual approval needed ────────────────────
+	if len(manualPlans) > 0 || len(maintenance) > 0 {
+		lines = append(lines, "💡 **Hành động:**")
+		lines = append(lines, "   • Gõ \"xem pending\" để xem chi tiết")
+		lines = append(lines, "   • Admin: duyệt/từ chối ngay hoặc vào Dashboard")
+	}
 
 	return strings.Join(lines, "\n")
+}
+
+func formatPlanDetail(p map[string]any) string {
+	productCode := strAny(p, "product_code")
+	skuCode := strAny(p, "sku_code")
+	reasonVI := strAny(p, "reason_vi")
+	pctStr := ""
+	if proposed, ok := p["proposed_pct"].(map[string]any); ok {
+		parts := make([]string, 0)
+		for provider := range proposed {
+			parts = append(parts, fmt.Sprintf("%s: %.0f%%", provider, getFloat(proposed, provider)))
+		}
+		if len(parts) > 0 {
+			pctStr = " → " + strings.Join(parts, " / ")
+		}
+	}
+	detail := fmt.Sprintf("%s/%s%s", productCode, skuCode, pctStr)
+	if reasonVI != "" {
+		detail += fmt.Sprintf(" (%s)", reasonVI)
+	}
+	return detail
 }
 
 func getBool(m map[string]any, key string) bool {
@@ -259,6 +317,17 @@ func (s *Server) chatApproveRoutingPlan(ctx context.Context, planID uint64, acto
 	if err := s.DB.UpdateRoutingPlanStatus(ctx, planID, "executed", actor); err != nil {
 		return "", err
 	}
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       plan.ProductCode,
+			SKU:           sku,
+			HealthStatus:  "green",
+			TriggerEvent:  "routing_applied",
+			ActionSummary: fmt.Sprintf("Chat: duyệt routing plan #%d — %s/%s", planID, plan.ProductCode, sku),
+			Actor:         actor,
+			DedupeKey:     fmt.Sprintf("chat_routing_approve:%d", planID),
+		})
+	}()
 	return fmt.Sprintf("Đã duyệt kế hoạch routing #%d — áp dụng %v", planID, out.Applied), nil
 }
 
@@ -304,6 +373,17 @@ func (s *Server) chatApproveScopeRouting(ctx context.Context, product, sku, acto
 	if err := s.DB.UpdateRoutingPlanStatus(ctx, planID, "executed", actor); err != nil {
 		return "", err
 	}
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       product,
+			SKU:           sku,
+			HealthStatus:  "green",
+			TriggerEvent:  "routing_applied",
+			ActionSummary: fmt.Sprintf("Chat: duyệt routing %s/%s — áp dụng thủ công", product, sku),
+			Actor:         actor,
+			DedupeKey:     fmt.Sprintf("chat_routing_scope:%s:%s:%d", product, sku, planID),
+		})
+	}()
 	return fmt.Sprintf("Đã duyệt routing %s/%s — áp dụng %v", product, sku, out.Applied), nil
 }
 
@@ -318,6 +398,17 @@ func (s *Server) chatRejectRoutingPlan(ctx context.Context, planID uint64, actor
 	if err := s.DB.UpdateRoutingPlanStatus(ctx, planID, "rejected", actor); err != nil {
 		return "", err
 	}
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       plan.ProductCode,
+			SKU:           plan.SKUCode,
+			HealthStatus:  "yellow",
+			TriggerEvent:  "routing_applied",
+			ActionSummary: fmt.Sprintf("Chat: từ chối routing plan #%d — %s/%s (giữ nguyên routing hiện tại)", planID, plan.ProductCode, plan.SKUCode),
+			Actor:         actor,
+			DedupeKey:     fmt.Sprintf("chat_routing_reject:%d", planID),
+		})
+	}()
 	return fmt.Sprintf("Đã từ chối kế hoạch routing #%d (%s/%s)", planID, plan.ProductCode, plan.SKUCode), nil
 }
 

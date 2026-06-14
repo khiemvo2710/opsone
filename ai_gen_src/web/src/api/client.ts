@@ -3,11 +3,23 @@ import type { ApiError } from '../types/api';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
+function mockSessionActor(): string | null {
+  try {
+    const raw = localStorage.getItem('opsone_mock_session');
+    if (!raw) return null;
+    const s = JSON.parse(raw) as { name?: string };
+    return s.name?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 async function authHeaders(): Promise<Record<string, string>> {
   if (devAuthBypass) {
+    const actor = mockSessionActor() ?? 'khiemvt';
     return {
       'X-OpsOne-Role': 'admin',
-      'X-OpsOne-Actor': 'khiemvt',
+      'X-OpsOne-Actor': actor,
     };
   }
   const account = pca.getActiveAccount() ?? pca.getAllAccounts()[0];

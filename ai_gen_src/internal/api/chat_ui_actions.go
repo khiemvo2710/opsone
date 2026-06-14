@@ -59,6 +59,18 @@ func (s *Server) executeUIAction(
 			return "", fmt.Errorf("không đổi được chế độ")
 		}
 		return reply, nil
+	case catalog.UIActionSetAllMaintenance:
+		reply, ok := s.tryChatSetAllMaintenanceReply(ctx, userMsg, actor, isAdmin)
+		if !ok {
+			return "", fmt.Errorf("không bật được bảo trì toàn hệ thống")
+		}
+		return reply, nil
+	case catalog.UIActionReopenAllServices:
+		reply, ok := s.tryChatReopenAllServicesReply(ctx, userMsg, actor, isAdmin)
+		if !ok {
+			return "", fmt.Errorf("không mở lại được toàn hệ thống")
+		}
+		return reply, nil
 	default:
 		return "", fmt.Errorf("thao tác UI chưa hỗ trợ: %s", action)
 	}

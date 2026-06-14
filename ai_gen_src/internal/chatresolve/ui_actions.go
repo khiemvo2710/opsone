@@ -83,6 +83,13 @@ func DetectUIAction(msg string) (catalog.UIActionKey, UIActionSlots) {
 	if IsExtendMaintenanceCommand(msg) {
 		return catalog.UIActionExtendMaint, slots
 	}
+	// Global "all services" commands must be checked before product-scoped ones.
+	if IsReopenAllServicesCommand(msg) {
+		return catalog.UIActionReopenAllServices, slots
+	}
+	if IsSetAllMaintenanceCommand(msg) {
+		return catalog.UIActionSetAllMaintenance, slots
+	}
 	if IsReopenServiceCommand(msg) {
 		return catalog.UIActionReopenService, slots
 	}

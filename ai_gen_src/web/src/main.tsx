@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MsalProvider } from '@azure/msal-react';
 import { App } from './App';
 import { ToastProvider } from './context/ToastContext';
+import { ScrollNavProvider } from './context/ScrollNavContext';
 import { devAuthBypass, msalEnabled, pca } from './auth/msalConfig';
 import './index.css';
 
@@ -22,13 +23,15 @@ async function bootstrap() {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
-          {msalEnabled ? (
-            <MsalProvider instance={pca}>
+          <ScrollNavProvider>
+            {msalEnabled ? (
+              <MsalProvider instance={pca}>
+                <App />
+              </MsalProvider>
+            ) : (
               <App />
-            </MsalProvider>
-          ) : (
-            <App />
-          )}
+            )}
+          </ScrollNavProvider>
         </ToastProvider>
       </QueryClientProvider>
     </StrictMode>

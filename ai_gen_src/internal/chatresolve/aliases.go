@@ -12,12 +12,29 @@ var staticProductAliases = map[string]string{
 	"topup mobi": "TOPUP_MOBI", "topup mobifone": "TOPUP_MOBI", "nap mobi": "TOPUP_MOBI",
 	"nap mobifone": "TOPUP_MOBI", "naptien mobi": "TOPUP_MOBI", "mobi topup": "TOPUP_MOBI",
 	"mobifone topup": "TOPUP_MOBI", "topup_mobi": "TOPUP_MOBI",
+	// "top up" variants (user types with space or hyphen, NormalizeKey converts to space)
+	"top up mobi": "TOPUP_MOBI", "top up mobifone": "TOPUP_MOBI",
+	// STT mishears: "top up" → "tốt áp" (tot ap), "top ap", "cấp áp" (cap ap)
+	// Also "topup up" (double-word STT artifact)
+	"tot ap mobi": "TOPUP_MOBI", "tot ap mobifone": "TOPUP_MOBI",
+	"top ap mobi": "TOPUP_MOBI", "top ap mobifone": "TOPUP_MOBI",
+	"cap ap mobi": "TOPUP_MOBI", "cap ap mobifone": "TOPUP_MOBI",
+	"topup up mobi": "TOPUP_MOBI", "topup up mobifone": "TOPUP_MOBI",
 
 	"topup vina": "TOPUP_VINA", "topup vinaphone": "TOPUP_VINA", "nap vina": "TOPUP_VINA",
 	"nap vinaphone": "TOPUP_VINA", "vina topup": "TOPUP_VINA", "topup_vina": "TOPUP_VINA",
+	"top up vina": "TOPUP_VINA", "top up vinaphone": "TOPUP_VINA",
+	"tot ap vina": "TOPUP_VINA", "tot ap vinaphone": "TOPUP_VINA",
+	"top ap vina": "TOPUP_VINA", "top ap vinaphone": "TOPUP_VINA",
+	"cap ap vina": "TOPUP_VINA", "cap ap vinaphone": "TOPUP_VINA",
+	"topup up vina": "TOPUP_VINA", "topup up vinaphone": "TOPUP_VINA",
 
 	"topup viettel": "TOPUP_VIETTEL", "nap viettel": "TOPUP_VIETTEL", "viettel topup": "TOPUP_VIETTEL",
 	"topup_viettel": "TOPUP_VIETTEL",
+	"top up viettel": "TOPUP_VIETTEL",
+	"tot ap viettel": "TOPUP_VIETTEL", "top ap viettel": "TOPUP_VIETTEL",
+	"cap ap viettel": "TOPUP_VIETTEL",
+	"topup up viettel": "TOPUP_VIETTEL",
 
 	"data mobi": "DATA_MOBI", "data mobifone": "DATA_MOBI", "data_mobi": "DATA_MOBI",
 	"data vina": "DATA_VINA", "data vinaphone": "DATA_VINA", "data_vina": "DATA_VINA",
@@ -42,9 +59,15 @@ var topupTypeTokens = map[string]struct{}{
 }
 
 var staticProviderAliases = map[string]string{
-	"esale": "ESALE", "e sale": "ESALE", "e-sale": "ESALE",
+	// ESALE — STT hay nhận là "Excel", "e sale", "e sel"
+	"esale": "ESALE", "e sale": "ESALE", "e-sale": "ESALE", "e sel": "ESALE",
+	"excel": "ESALE", "e xcel": "ESALE", "ixcel": "ESALE",
+	// IMEDIA — STT hay nhận là "ai Media", "ai media", "a media"
 	"imedia": "IMEDIA", "i media": "IMEDIA", "i-media": "IMEDIA",
-	"shoppay": "SHOPPAY", "shop pay": "SHOPPAY", "shop-pay": "SHOPPAY",
+	"ai media": "IMEDIA", "ai-media": "IMEDIA",
+	"eye media": "IMEDIA", "a media": "IMEDIA",
+	// SHOPPAY
+	"shoppay": "SHOPPAY", "shop pay": "SHOPPAY", "shop-pay": "SHOPPAY", "shoppy": "SHOPPAY",
 }
 
 // carrierProviderTokens are telco names — not routing providers.

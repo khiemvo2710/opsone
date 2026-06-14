@@ -41,7 +41,7 @@ func main() {
 	log.Printf("OpsOne worker-agent (core) starting interval=%s data_source=%s", interval, settings.DataSource)
 
 	n := notify.NewService(db, cfg)
-	runner := agent.NewRunner(db, n)
+	runner := agent.NewRunner(db, n, cfg)
 	if err := runner.RunBlocking(ctx, interval); err != nil && err != context.Canceled {
 		log.Fatalf("agent worker: %v", err)
 	}

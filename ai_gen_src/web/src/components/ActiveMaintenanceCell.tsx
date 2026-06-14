@@ -39,15 +39,20 @@ export function ActiveMaintenanceCell({ row, busy = false, onReopen, onExtend }:
   const [editDraft, setEditDraft] = useState(baseDraft);
   const [extendHint, setExtendHint] = useState<string | null>(null);
 
+  // Reset editing only when the actual maintenance window timestamps change (not on every
+  // object reference change from polling). Using primitive values avoids closing the form
+  // on every auto-refresh cycle.
+  const mStartsAt = m?.starts_at ?? null;
+  const mEndsAt = m?.ends_at ?? null;
   useEffect(() => {
-    if (!m) {
+    if (!mStartsAt && !mEndsAt) {
       setEditing(false);
       return;
     }
-    setEditDraft(baseDraft);
+    setEditDraft(maintenanceWindowFromISO(String(mStartsAt ?? ''), String(mEndsAt ?? '')));
     setEditing(false);
     setExtendHint(null);
-  }, [m, baseDraft]);
+  }, [mStartsAt, mEndsAt]);
 
   if (!m) return <span className="muted">—</span>;
 

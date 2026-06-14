@@ -78,6 +78,17 @@ func (s *Server) handleScopeRoutingApprove(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       product,
+			SKU:           sku,
+			HealthStatus:  "green",
+			TriggerEvent:  "routing_applied",
+			ActionSummary: fmt.Sprintf("Admin duyệt routing %s/%s từ Dashboard", product, sku),
+			Actor:         by,
+			DedupeKey:     fmt.Sprintf("scope_routing_approve:%d", planID),
+		})
+	}()
 	writeJSON(w, http.StatusOK, map[string]any{"plan_id": planID, "applied": out.Applied, "change_log_ids": out.ChangeLogIDs})
 }
 
@@ -121,6 +132,17 @@ func (s *Server) handleScopeRoutingApply(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, "routing_failed", err.Error())
 		return
 	}
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       product,
+			SKU:           sku,
+			HealthStatus:  "green",
+			TriggerEvent:  "routing_applied",
+			ActionSummary: fmt.Sprintf("Admin chỉnh routing thủ công %s/%s", product, sku),
+			Actor:         by,
+			DedupeKey:     fmt.Sprintf("scope_routing_manual:%s:%s:%d", product, sku, out.ChangeLogIDs),
+		})
+	}()
 	writeJSON(w, http.StatusOK, map[string]any{"applied": out.Applied, "change_log_ids": out.ChangeLogIDs})
 }
 
@@ -135,6 +157,17 @@ func (s *Server) handleScopeRoutingRestoreBaseline(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, "routing_failed", err.Error())
 		return
 	}
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       product,
+			SKU:           sku,
+			HealthStatus:  "green",
+			TriggerEvent:  "routing_applied",
+			ActionSummary: fmt.Sprintf("Admin restore routing về baseline %s/%s", product, sku),
+			Actor:         by,
+			DedupeKey:     fmt.Sprintf("scope_routing_restore:%s:%s:%d", product, sku, out.ChangeLogIDs),
+		})
+	}()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"applied":        out.Applied,
 		"change_log_ids": out.ChangeLogIDs,
@@ -177,6 +210,17 @@ func (s *Server) handleScopeRoutingReject(w http.ResponseWriter, r *http.Request
 			ResolutionAction: "admin_reject",
 		})
 	}
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:       product,
+			SKU:           sku,
+			HealthStatus:  "yellow",
+			TriggerEvent:  "routing_applied",
+			ActionSummary: fmt.Sprintf("Admin từ chối đề xuất routing %s/%s (giữ nguyên routing hiện tại)", product, sku),
+			Actor:         by,
+			DedupeKey:     fmt.Sprintf("scope_routing_reject:%d", planID),
+		})
+	}()
 	writeJSON(w, http.StatusOK, map[string]any{"plan_id": planID, "status": "rejected"})
 }
 
@@ -335,6 +379,11 @@ func (s *Server) handleScopeMaintenanceReopenService(w http.ResponseWriter, r *h
 	var err error
 	if len(body.MaintenanceIDs) > 0 {
 		cancelled, err = s.DB.CancelMaintenanceByIDs(ctx, body.MaintenanceIDs, by)
+		if err == nil {
+			// Also sweep any orphan windows not in the provided IDs list.
+			extra, _ := s.DB.CancelActiveMaintenanceForSKU(ctx, product, sku, by)
+			cancelled += extra
+		}
 	} else {
 		cancelled, err = s.DB.CancelActiveMaintenanceForSKU(ctx, product, sku, by)
 		if err == nil && cancelled == 0 {
@@ -347,12 +396,16 @@ func (s *Server) handleScopeMaintenanceReopenService(w http.ResponseWriter, r *h
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	if n, err := s.DB.CountActiveMaintenanceForSKU(ctx, product, sku); err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
-	} else if n > 0 {
-		writeError(w, http.StatusBadRequest, "reopen_failed", fmt.Sprintf("vẫn còn %d cửa sổ bảo trì active", n))
-		return
+	// Final sweep: if any windows still remain (e.g. product_code/sku mismatch in earlier cancel),
+	// try once more via activeMaintenanceIDsForScope before proceeding.
+	if n, cntErr := s.DB.CountActiveMaintenanceForSKU(ctx, product, sku); cntErr == nil && n > 0 {
+		if ids := s.activeMaintenanceIDsForScope(ctx, product, sku); len(ids) > 0 {
+			extra, _ := s.DB.CancelMaintenanceByIDs(ctx, ids, by)
+			cancelled += extra
+		}
+		// Also try direct sweep one more time.
+		extra, _ := s.DB.CancelActiveMaintenanceForSKU(ctx, product, sku, by)
+		cancelled += extra
 	}
 
 	_ = s.DB.CancelPendingRoutingPlansForScope(ctx, product, sku)

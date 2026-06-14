@@ -309,6 +309,8 @@ export function ServiceOverviewTable({
   const [dirtyPlanDraftKeys, setDirtyPlanDraftKeys] = useState<Set<string>>(new Set());
   const [restoreScopeKey, setRestoreScopeKey] = useState<string | null>(null);
   const [restoreDraft, setRestoreDraft] = useState<Record<string, Record<string, number>>>({});
+  const [manualRoutingScopeKey, setManualRoutingScopeKey] = useState<string | null>(null);
+  const [manualRoutingDraft, setManualRoutingDraft] = useState<Record<string, Record<string, number>>>({});
   const [maintWindowDraft, setMaintWindowDraft] = useState<
     Record<string, { startsAt: string; endsAt: string }>
   >({});
@@ -316,6 +318,7 @@ export function ServiceOverviewTable({
   useEffect(() => {
     if (!busyScopeKey) {
       setRestoreScopeKey(null);
+      setManualRoutingScopeKey(null);
     }
   }, [busyScopeKey]);
 
@@ -510,6 +513,14 @@ export function ServiceOverviewTable({
                   ? routingPctValidationError(restoreValues, activeProviders)
                   : null;
                 const restoreValid = restoreError === null;
+                const isManualRouting = manualRoutingScopeKey === scopeKey;
+                const manualValues =
+                  manualRoutingDraft[scopeKey] ??
+                  initialRoutingPct(undefined, row.routing_pct, activeProviders);
+                const manualError = isManualRouting
+                  ? routingPctValidationError(manualValues, activeProviders)
+                  : null;
+                const manualValid = manualError === null;
                 const baselineDraft = baselineRoutingPct(row.baseline_pct, activeProviders);
 
                 const saveRoutingDraft = (values: Record<string, number>) => {
@@ -630,6 +641,103 @@ export function ServiceOverviewTable({
                   );
                 };
 
+                const buildManualRoutingRow = () => {
+                  if (!isManualRouting) return null;
+                  return (
+                    <tr
+                      key={`${row.product_code}-${row.sku_code}-manual`}
+                      className="overview-table__plan-row overview-table__restore-row"
+                    >
+                      <td colSpan={planLabelColSpan} className="overview-table__plan-label">
+                        Chia tải
+                      </td>
+                      {providers.map((p) => {
+                        const supported = isProviderSupported(p);
+                        const invalid =
+                          supported && routingPctFieldInvalid(p, manualValues, providers);
+                        return (
+                          <td key={p} className="mono nowrap overview-table__plan-pct">
+                            {supported ? (
+                              <span className="overview-table__plan-pct-wrap">
+                                <input
+                                  type="number"
+                                  className={`overview-table__plan-input overview-table__plan-input--stepper${invalid ? ' overview-table__plan-input--bad' : ''}`}
+                                  min={0}
+                                  max={ROUTING_PCT_MAX}
+                                  step={1}
+                                  disabled={scopeBusy}
+                                  value={manualValues[p] ?? ''}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    const n = raw === '' ? 0 : Number.parseFloat(raw);
+                                    setManualRoutingDraft((prev) => ({
+                                      ...prev,
+                                      [scopeKey]: {
+                                        ...manualValues,
+                                        [p]: Number.isFinite(n) ? Math.round(n) : 0,
+                                      },
+                                    }));
+                                  }}
+                                />
+                                <span className="muted">%</span>
+                              </span>
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                      <td colSpan={2} className="overview-table__plan-actions">
+                        <div className="overview-table__plan-actions-inner">
+                          {manualError && (
+                            <span className="overview-table__plan-error">{manualError}</span>
+                          )}
+                          <button
+                            type="button"
+                            className="btn btn--ghost btn--xs"
+                            disabled={scopeBusy || !baselineDraft}
+                            title={baselineDraft ? 'Điền tỷ lệ baseline biz' : 'Chưa có baseline'}
+                            onClick={() => {
+                              if (!baselineDraft) return;
+                              setManualRoutingDraft((prev) => ({
+                                ...prev,
+                                [scopeKey]: baselineDraft,
+                              }));
+                            }}
+                          >
+                            Baseline
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn--primary btn--xs"
+                            disabled={scopeBusy || !manualValid}
+                            title={manualValid ? 'Áp dụng routing' : (manualError ?? 'Chưa hợp lệ')}
+                            onClick={() => {
+                              if (!manualValid) return;
+                              onApplyScopeRouting?.({
+                                productCode: row.product_code,
+                                skuCode: row.sku_code,
+                                routing: manualValues,
+                              });
+                              setManualRoutingScopeKey(null);
+                            }}
+                          >
+                            {scopeBusy ? '…' : 'Lưu'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn--ghost btn--xs"
+                            disabled={scopeBusy}
+                            onClick={() => setManualRoutingScopeKey(null)}
+                          >
+                            Hủy
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                };
+
                 const skuHealth = effectiveRowHealth(row, productThreshold);
                 const inMaintenance = isSkuUnderActiveMaintenance(row);
 
@@ -725,7 +833,8 @@ export function ServiceOverviewTable({
                     {providers.map((p) => {
                       const supported = isProviderSupported(p);
                       const routingPct = row.routing_pct?.[p];
-                      const maintained = isProviderUnderMaintenance(row, p);
+                      const maintained =
+                        isProviderUnderMaintenance(row, p) && (routingPct ?? 0) > 0;
                       const inactive = supported && !maintained && (routingPct ?? 0) <= 0;
                       const reopenBlocked =
                         isPending ||
@@ -771,14 +880,42 @@ export function ServiceOverviewTable({
                               onExtend={onExtendMaintenance}
                             />
                           ) : (
-                            onApproveScopeMaintenance && (
-                              <ServiceMaintenanceButton
-                                productCode={row.product_code}
-                                skuCode={row.sku_code}
-                                busy={scopeBusy}
-                                onStart={onApproveScopeMaintenance}
-                              />
-                            )
+                            <div style={{ display: 'flex', flexDirection: 'row', gap: '4px', alignItems: 'stretch', width: '100%' }}>
+                              {onApproveScopeMaintenance && (
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <ServiceMaintenanceButton
+                                    productCode={row.product_code}
+                                    skuCode={row.sku_code}
+                                    busy={scopeBusy}
+                                    onStart={onApproveScopeMaintenance}
+                                  />
+                                </div>
+                              )}
+                              {onApplyScopeRouting && (
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <button
+                                    type="button"
+                                    style={{ width: '100%' }}
+                                    className={`btn btn--ghost btn--xs${isManualRouting ? ' btn--active' : ''}`}
+                                    disabled={scopeBusy}
+                                    title="Điều chỉnh tỷ lệ routing thủ công"
+                                    onClick={() => {
+                                      if (isManualRouting) {
+                                        setManualRoutingScopeKey(null);
+                                      } else {
+                                        setManualRoutingDraft((prev) => ({
+                                          ...prev,
+                                          [scopeKey]: initialRoutingPct(undefined, row.routing_pct, activeProviders),
+                                        }));
+                                        setManualRoutingScopeKey(scopeKey);
+                                      }
+                                    }}
+                                  >
+                                    Chia tải
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           )}
                         </div>
                         <div className="overview-table__product-cell-auto">
@@ -799,8 +936,10 @@ export function ServiceOverviewTable({
 
                 if (!showPlanRow) {
                   const restoreRow = buildRestoreRow();
+                  const manualRow = buildManualRoutingRow();
+                  const extraRows = [restoreRow, manualRow].filter(Boolean) as ReactElement[];
                   return markScopeBlockEnd(
-                    restoreRow ? [skuRow, restoreRow] : [skuRow],
+                    extraRows.length > 0 ? [skuRow, ...extraRows] : [skuRow],
                   );
                 }
 
@@ -1081,9 +1220,11 @@ export function ServiceOverviewTable({
                 );
 
                 const restoreRow = buildRestoreRow();
+                const manualRow = buildManualRoutingRow();
+                const extraRows = [restoreRow, manualRow].filter(Boolean) as ReactElement[];
                 return markScopeBlockEnd(
-                  restoreRow
-                    ? [skuRow, ...subRows, planRow, restoreRow]
+                  extraRows.length > 0
+                    ? [skuRow, ...subRows, planRow, ...extraRows]
                     : [skuRow, ...subRows, planRow],
                 );
                   })}

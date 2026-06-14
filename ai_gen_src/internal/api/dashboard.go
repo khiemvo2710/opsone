@@ -76,7 +76,11 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 			maintainedProviders = maintainedActiveProviders(mws, scopes[k], now)
 		}
 
-		snap := s.buildScopeSnapshot(ctx, caches, k.product, k.sku, scopes[k], maintainedProviders)
+		// Normalize routing: zero out maintained/inactive providers and rescale active ones.
+		// Use this for BOTH health computation and the response so they stay in sync.
+		effectiveRouting := normalizeRoutingDisplay(scopes[k], maintainedProviders)
+
+		snap := s.buildScopeSnapshot(ctx, caches, k.product, k.sku, effectiveRouting, maintainedProviders)
 
 		m := meta[k.product]
 		label := m.Label
@@ -90,7 +94,7 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 			"service_type":     svcType,
 			"sku_code":         k.sku,
 			"health_status":    snap.Health,
-			"routing_pct":      scopes[k],
+			"routing_pct":      effectiveRouting,
 			"baseline_pct":     baselines[k],
 			"provider_metrics": snap.ProviderMetrics,
 		}
@@ -163,6 +167,17 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 			_ = s.DB.CancelPendingRoutingPlansForScope(ctx, k.product, k.sku)
 			hasPendingPlan = false
 		}
+		// Cancel stale plan when admin already changed routing to match the proposal
+		// (race: admin acted manually before plan was applied).
+		if hasPendingPlan {
+			if plan, ok := planByScope[k]; ok {
+				var planJSON agent.RoutingPlanJSON
+				if json.Unmarshal(plan.PlanJSON, &planJSON) == nil && routingMatchesPlan(effectiveRouting, planJSON.Proposed) {
+					_ = s.DB.CancelPendingRoutingPlansForScope(ctx, k.product, k.sku)
+					hasPendingPlan = false
+				}
+			}
+		}
 
 		if !inActiveMaint && hasTh {
 			if pm, ok := s.prioritizeMaintenanceSuggestion(ctx, caches, k.product, k.sku, snap, maintainedProviders, liveMaint); ok {
@@ -191,7 +206,10 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 						updated[row.ProviderCode] = roundPct(row.TrafficPct)
 					}
 					scopes[k] = updated
-					item["routing_pct"] = updated
+				if mws, ok := maintByScope[k]; ok {
+					maintainedProviders = maintainedActiveProviders(mws, scopes[k], now)
+				}
+				item["routing_pct"] = normalizeRoutingDisplay(updated, maintainedProviders)
 				}
 				hasPendingPlan = false
 				livePlan = nil
@@ -205,9 +223,23 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 						break
 					}
 				}
-				snap = s.buildScopeSnapshot(ctx, caches, k.product, k.sku, scopes[k], maintainedProviders)
+				snap = s.buildScopeSnapshot(ctx, caches, k.product, k.sku, normalizeRoutingDisplay(scopes[k], maintainedProviders), maintainedProviders)
 				item["health_status"] = snap.Health
 				item["provider_metrics"] = snap.ProviderMetrics
+			}
+		}
+
+		// Suppress maintenance suggestion if the target provider is already at 0%
+		// effective routing (admin already cut traffic before agent acted).
+		if maintWarranted && liveMaint != nil {
+			if p, _ := liveMaint["provider_code"].(string); p != "" && effectiveRouting[p] == 0 {
+				liveMaint = nil
+				maintWarranted = false
+			}
+		}
+		if dbMaint != nil {
+			if p, _ := dbMaint["provider_code"].(string); p != "" && effectiveRouting[p] == 0 {
+				dbMaint = nil
 			}
 		}
 
@@ -247,4 +279,52 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 
 func roundPct(v float64) float64 {
 	return math.Round(v*10) / 10
+}
+
+// routingMatchesPlan returns true when the current effective routing already matches
+// the plan's proposed routing within 1% tolerance per provider.
+// Used to auto-cancel stale proposals when an admin manually set routing first.
+func routingMatchesPlan(current, proposed map[string]float64) bool {
+	if len(current) == 0 || len(proposed) == 0 {
+		return false
+	}
+	for provider, proposedPct := range proposed {
+		if math.Abs(current[provider]-proposedPct) > 1.0 {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeRoutingDisplay zeroes maintained providers in the routing map and
+// rescales the remaining active providers to sum to 100%.
+// This ensures the dashboard always shows 100% total routing even when a provider
+// is in maintenance and its traffic_pct hasn't been redistributed in the DB yet.
+func normalizeRoutingDisplay(routing map[string]float64, maintained []string) map[string]float64 {
+	if len(maintained) == 0 {
+		return routing
+	}
+	maintSet := make(map[string]bool, len(maintained))
+	for _, p := range maintained {
+		maintSet[p] = true
+	}
+
+	activeTotal := 0.0
+	for p, pct := range routing {
+		if !maintSet[p] {
+			activeTotal += pct
+		}
+	}
+
+	result := make(map[string]float64, len(routing))
+	for p, pct := range routing {
+		if maintSet[p] {
+			result[p] = 0
+		} else if activeTotal > 0 {
+			result[p] = roundPct(pct * 100.0 / activeTotal)
+		} else {
+			result[p] = 0
+		}
+	}
+	return result
 }

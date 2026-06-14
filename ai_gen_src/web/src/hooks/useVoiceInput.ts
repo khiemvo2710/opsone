@@ -21,6 +21,14 @@ export const VOICE_MIC_ON_PHRASES = [
   'mo micro',
   'bật microphone',
   'mở microphone',
+  'mở chat',
+  'mo chat',
+  'mở khung chat',
+  'mo khung chat',
+  'bật chat',
+  'bat chat',
+  'mở trợ lý',
+  'mo tro ly',
 ] as const;
 
 /** Nói các cụm này → đóng khung chat (mic vẫn bật). */
@@ -75,6 +83,8 @@ function resolveVoiceCommand(text: string): 'mic_on' | 'close_chat' | 'end_sessi
   if (matchesEndSessionPhrase(norm)) return 'end_session';
   if (matchesMicOnPhrase(norm)) return 'mic_on';
   if (matchesCloseChatPhrase(norm)) return 'close_chat';
+  // "alo" khi mic đang bật → mở khung chat (gọi onMicOn để handleAloWake xử lý)
+  if (matchesAloWake(norm)) return 'mic_on';
   return null;
 }
 
@@ -433,9 +443,13 @@ export function useVoiceInput({
 
   useEffect(
     () => () => {
+      // Stop mic session and dispose recognition when hook unmounts (e.g. logout)
+      micSessionRef.current = false;
       clearSilenceTimer();
       clearRestartTimer();
       clearWatchdogTimer();
+      disposeRecognition(recognitionRef.current);
+      recognitionRef.current = null;
     },
     [clearRestartTimer, clearSilenceTimer, clearWatchdogTimer],
   );

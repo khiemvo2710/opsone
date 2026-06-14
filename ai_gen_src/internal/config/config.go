@@ -28,6 +28,7 @@ type Config struct {
 	LLMModel          string
 	LLMTimeoutSec     int
 	DevAuthBypass     bool
+	DashboardURL      string // Public URL of the web dashboard (for email deep-links)
 }
 
 // DefaultGreenNodeLLMURL is GreenNode AIP MaaS OpenAI-compatible endpoint.
@@ -44,7 +45,7 @@ func Load() Config {
 	loadDotEnv(".env")
 	tz := envOr("APP_TIMEZONE", DefaultTimezone)
 	return Config{
-		MySQLDSN:         ensureDSNTimezone(sanitizeMySQLDSN(envOr("MYSQL_DSN", defaultMySQLDSN(tz))), tz),
+		MySQLDSN:         ensureDSNCharset(ensureDSNTimezone(sanitizeMySQLDSN(envOr("MYSQL_DSN", defaultMySQLDSN(tz))), tz)),
 		DataSource:       envOr("DATA_SOURCE", "mock"),
 		APIAddr:          envOr("API_ADDR", ":8080"),
 		CORSOrigin:       envOr("CORS_ORIGIN", "http://localhost:5173"),
@@ -61,6 +62,7 @@ func Load() Config {
 		LLMModel:       normalizeLLMModel(envOr("LLM_MODEL", DefaultLLMModel)),
 		LLMTimeoutSec:  envIntOr("LLM_TIMEOUT_SECONDS", 30),
 		DevAuthBypass:  envOr("DEV_AUTH_BYPASS", "true") == "true",
+		DashboardURL:   strings.TrimRight(envOr("DASHBOARD_URL", "http://localhost:5173"), "/"),
 	}
 }
 
@@ -169,6 +171,30 @@ func sanitizeMySQLDSN(dsn string) string {
 		dsn = strings.TrimSuffix(dsn, "?")
 	}
 	return dsn
+}
+
+// ensureDSNCharset ensures charset=utf8mb4 in the DSN — prevents
+// "Incorrect string value" errors for Vietnamese characters in text columns.
+// If an existing charset= param is present but not utf8mb4, it is replaced.
+func ensureDSNCharset(dsn string) string {
+	if strings.Contains(dsn, "charset=utf8mb4") {
+		return dsn
+	}
+	// Replace any existing charset=<value> with charset=utf8mb4
+	if idx := strings.Index(dsn, "charset="); idx >= 0 {
+		end := strings.Index(dsn[idx:], "&")
+		if end < 0 {
+			// charset= is the last param
+			return dsn[:idx] + "charset=utf8mb4"
+		}
+		return dsn[:idx] + "charset=utf8mb4" + dsn[idx+end:]
+	}
+	// No charset param — append it
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "charset=utf8mb4"
 }
 
 // ensureDSNTimezone appends loc= if MYSQL_DSN omits it (prevents UTC storage vs local clock).

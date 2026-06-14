@@ -207,6 +207,17 @@ func (s *Server) routingPlanResponse(ctx context.Context, product, sku string, p
 		if row, ok, err := s.DB.GetPendingRoutingPlanForScope(ctx, product, sku); err == nil && ok {
 			return routingPlanJSON(row)
 		}
+	} else {
+		// No plan in DB yet — insert so chat commands can also see this proposal.
+		// (dashboard polls would otherwise return a synthetic id=0 plan invisible to chat)
+		hasMaint, mErr := s.DB.HasPendingMaintenanceRecommendation(ctx, product, sku)
+		if mErr == nil && !hasMaint {
+			if _, iErr := s.DB.InsertRoutingPlan(ctx, nil, product, plan.Scope, sku, plan, "pending_approve"); iErr == nil {
+				if row, ok, err := s.DB.GetPendingRoutingPlanForScope(ctx, product, sku); err == nil && ok {
+					return routingPlanJSON(row)
+				}
+			}
+		}
 	}
 	return syntheticPendingPlanMap(product, sku, plan)
 }

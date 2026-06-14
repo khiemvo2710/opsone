@@ -42,7 +42,10 @@ DROP TABLE IF EXISTS
   product_skus,
   product_providers,
   providers,
-  products;
+  products,
+  routing_action_verify,
+  metric_baseline_hourly,
+  voice_phonetic_map;
 
 SET FOREIGN_KEY_CHECKS = 1;
 
@@ -145,11 +148,11 @@ CREATE TABLE routing_scope_state (
 CREATE TABLE agent_settings (
   id                      TINYINT UNSIGNED NOT NULL PRIMARY KEY DEFAULT 1,
   scheduler_enabled       TINYINT(1)       NOT NULL DEFAULT 1,
-  scheduler_interval_min  TINYINT UNSIGNED NOT NULL DEFAULT 5,
+  scheduler_interval_min  TINYINT UNSIGNED NOT NULL DEFAULT 1,
   data_source             ENUM('mock','production') NOT NULL DEFAULT 'mock',
   mock_enabled            TINYINT(1)       NOT NULL DEFAULT 1,
   mock_interval_min       TINYINT UNSIGNED NOT NULL DEFAULT 1,
-  mock_scenario           ENUM('normal','esale_degrading','sku_local_fault','random_spike','imedia_garena_pending') NOT NULL DEFAULT 'normal',
+  mock_scenario           ENUM('normal','esale_degrading','sku_local_fault','random_spike','imedia_garena_pending') NOT NULL DEFAULT 'imedia_garena_pending',
   mock_retention_hours    SMALLINT UNSIGNED NOT NULL DEFAULT 24,
   maintenance_default_duration_min TINYINT UNSIGNED NOT NULL DEFAULT 60,
   maintenance_auto_enabled TINYINT(1)      NOT NULL DEFAULT 0,
@@ -202,7 +205,7 @@ CREATE TABLE provider_chat_escalation (
 CREATE TABLE notification_log (
   id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   dedupe_key          VARCHAR(128) NOT NULL,
-  trigger_event       ENUM('routing_applied','maintenance_active','maintenance_scheduled') NOT NULL,
+  trigger_event       ENUM('breach','routing_applied','recovery_failed','maintenance_active','maintenance_scheduled','maintenance_completed','maintenance_cancelled') NOT NULL,
   health_status       ENUM('green','yellow','red') NOT NULL,
   product_code        VARCHAR(32)  NOT NULL,
   provider_code       VARCHAR(32)  NOT NULL,
@@ -465,6 +468,10 @@ CREATE TABLE chat_sessions (
   user_id         VARCHAR(64)  NOT NULL,
   created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  ctx_product     VARCHAR(32)  NULL COMMENT 'Sản phẩm đang thảo luận',
+  ctx_provider    VARCHAR(32)  NULL COMMENT 'Provider đang thảo luận',
+  ctx_sku         VARCHAR(32)  NULL COMMENT 'SKU đang thảo luận',
+  ctx_updated_at  DATETIME     NULL,
   KEY idx_chat_sessions_user (user_id, updated_at),
   KEY idx_chat_sessions_uuid (session_uuid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -575,4 +582,52 @@ CREATE TABLE users (
   UNIQUE KEY uk_users_oid (azure_oid),
   UNIQUE KEY uk_users_upn (upn),
   KEY idx_users_role (role_cached)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Voice phonetic domain map (STT normalization §P5+)
+CREATE TABLE voice_phonetic_map (
+  id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  heard_pattern VARCHAR(128) NOT NULL COMMENT 'Normalized pattern STT outputs',
+  canonical     VARCHAR(64)  NOT NULL COMMENT 'Correct term (product/provider/amount)',
+  category      ENUM('provider','product','amount','other') NOT NULL DEFAULT 'other',
+  priority      INT          NOT NULL DEFAULT 0,
+  enabled       TINYINT(1)   NOT NULL DEFAULT 1,
+  UNIQUE KEY uk_phonetic (heard_pattern),
+  KEY idx_phonetic_cat (category, enabled, priority DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Hourly metric baselines for anomaly detection
+CREATE TABLE metric_baseline_hourly (
+  id               BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  product_code     VARCHAR(32)  NOT NULL,
+  sku_code         VARCHAR(32)  NOT NULL DEFAULT '',
+  provider_code    VARCHAR(32)  NOT NULL,
+  hour_of_week     TINYINT UNSIGNED NOT NULL COMMENT '0=Mon00 .. 167=Sun23',
+  avg_success_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+  avg_pending_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+  avg_fail_rate    DECIMAL(5,2) NOT NULL DEFAULT 0,
+  stddev_success   DECIMAL(5,2) NOT NULL DEFAULT 0,
+  sample_count     INT UNSIGNED NOT NULL DEFAULT 0,
+  updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_baseline (product_code, sku_code, provider_code, hour_of_week),
+  KEY idx_baseline_lookup (product_code, sku_code, provider_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Routing action verification for auto-recovery check
+CREATE TABLE routing_action_verify (
+  id               BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  agent_change_id  BIGINT UNSIGNED NOT NULL,
+  product_code     VARCHAR(32)  NOT NULL,
+  sku_code         VARCHAR(32)  NOT NULL DEFAULT '',
+  pre_success_rate DECIMAL(5,2) NULL,
+  pre_pending_rate DECIMAL(5,2) NULL,
+  taken_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  verify_after     DATETIME     NOT NULL COMMENT 'When to run verification check',
+  verified_at      DATETIME     NULL,
+  post_success_rate DECIMAL(5,2) NULL,
+  post_pending_rate DECIMAL(5,2) NULL,
+  recovery_status  ENUM('pending','improved','no_change','degraded') NOT NULL DEFAULT 'pending',
+  escalated        TINYINT(1)   NOT NULL DEFAULT 0,
+  KEY idx_verify_pending (recovery_status, verify_after),
+  KEY idx_verify_change  (agent_change_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

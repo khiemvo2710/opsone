@@ -7,14 +7,12 @@ import { useChatDock } from '../hooks/useChatDock';
 import { RESIZE_CORNERS, useChatResize } from '../hooks/useChatResize';
 import { formatChatTime } from '../utils/datetimeLocal';
 import { ASSISTANT_NAME } from '../utils/assistantIdentity';
-import { userBubbleLabel, applyProfileUpdate, inferProfileFromSingleMessage, profileChanged, type ChatUserProfile } from '../utils/chatUserProfile';
+import { userBubbleLabel, inferProfileFromSingleMessage, type ChatUserProfile } from '../utils/chatUserProfile';
 import { CHAT_INTRO_MESSAGE } from '../utils/chatIntro';
-import {
-  buildProfileUpdateReply,
-  mergeProfileFromUserTexts,
-  shouldHandleAsProfileUpdate,
-} from '../utils/chatOnboarding';
 import { ChatAvatar } from './ChatAvatar';
+import { RedSkuScrollNav } from './RedSkuScrollNav';
+import { useScrollNav } from '../context/ScrollNavContext';
+import { useAuth, chatHistoryStorageKey } from '../context/AuthContext';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -26,73 +24,87 @@ function appendMessage(role: ChatMessage['role'], text: string): ChatMessage {
   return { role, text, at: Date.now() };
 }
 
-// Format pending suggestions from SSE event into a user-friendly system message
+// isAutoMode reports whether the auto_action means the system handles it automatically.
+function isAutoMode(autoAction: string | undefined): boolean {
+  return autoAction === 'auto' || autoAction === 'time_window';
+}
+
+// Format a routing plan item into a detail string.
+function formatPlanDetail(plan: Record<string, unknown>): string {
+  const productCode = String(plan.product_code || '');
+  const skuCode = String(plan.sku_code || '');
+  const reasonVI = String(plan.reason_vi || '');
+  const proposed = plan.proposed_pct as Record<string, number> | undefined;
+
+  let pctStr = '';
+  if (proposed && typeof proposed === 'object') {
+    const parts: string[] = [];
+    Object.entries(proposed).forEach(([provider, pct]) => {
+      parts.push(`${provider}: ${Math.round(pct)}%`);
+    });
+    if (parts.length > 0) pctStr = ` → ${parts.join(' / ')}`;
+  }
+
+  let detail = `${productCode}/${skuCode}${pctStr}`;
+  if (reasonVI) detail += ` (${reasonVI})`;
+  return detail;
+}
+
+// Format pending suggestions from SSE event into a context-aware system message.
+// Plans with auto_action=auto/time_window → "system handled" (no action needed).
+// Plans with auto_action=recommend_only    → "needs approval".
 function formatSuggestionSystemMessage(data: Record<string, unknown>): string {
-  const hasSuggestions = !!data.has_suggestions;
-  if (!hasSuggestions) return '';
+  if (!data.has_suggestions) return '';
+
+  const allPlans = Array.isArray(data.routing_plans) ? (data.routing_plans as Record<string, unknown>[]) : [];
+  const maintenance = Array.isArray(data.maintenance_suggestions) ? (data.maintenance_suggestions as Record<string, unknown>[]) : [];
+
+  const autoPlans = allPlans.filter((p) => isAutoMode(p.auto_action as string | undefined));
+  const manualPlans = allPlans.filter((p) => !isAutoMode(p.auto_action as string | undefined));
 
   const lines: string[] = [];
-  lines.push('📢 **Có việc mới cần xử lý!**\n');
 
-  // Add routing plans
-  const plans = Array.isArray(data.routing_plans) ? data.routing_plans : [];
-  if (plans.length > 0) {
-    lines.push('🔄 **Đề xuất Routing:** (Thay đổi phân phối traffic)');
-    for (let i = 0; i < Math.min(plans.length, 3); i += 1) {
-      const plan = plans[i] as Record<string, unknown>;
-      const productCode = String(plan.product_code || '');
-      const skuCode = String(plan.sku_code || '');
-      const reasonVI = String(plan.reason_vi || '');
-      const proposed = plan.proposed_pct as Record<string, number> | undefined;
-
-      let pctStr = '';
-      if (proposed && typeof proposed === 'object') {
-        const parts: string[] = [];
-        Object.entries(proposed).forEach(([provider, pct]) => {
-          parts.push(`${provider}: ${Math.round(pct)}%`);
-        });
-        if (parts.length > 0) {
-          pctStr = ` → ${parts.join(' / ')}`;
-        }
-      }
-
-      let detail = `${productCode}/${skuCode}${pctStr}`;
-      if (reasonVI) {
-        detail += ` (${reasonVI})`;
-      }
-      lines.push(`   • ${detail}`);
-    }
-    if (plans.length > 3) {
-      lines.push(`   • ...và ${plans.length - 3} kế hoạch khác`);
-    }
+  // ── Auto-handled plans ────────────────────────────────────────────────────
+  if (autoPlans.length > 0) {
+    lines.push('🤖 **Hệ thống đã tự động điều phối routing**\n');
+    lines.push('🔄 **Chi tiết:**');
+    autoPlans.slice(0, 3).forEach((p) => { lines.push(`   • ${formatPlanDetail(p)}`); });
+    if (autoPlans.length > 3) lines.push(`   • ...và ${autoPlans.length - 3} thay đổi khác`);
+    lines.push('');
+    lines.push('💡 Gõ "xem metric" để kiểm tra chỉ số sau routing');
     lines.push('');
   }
 
-  // Add maintenance suggestions
-  const maintenance = Array.isArray(data.maintenance_suggestions) ? data.maintenance_suggestions : [];
+  // ── Plans needing manual approval ─────────────────────────────────────────
+  if (manualPlans.length > 0) {
+    lines.push('📢 **Có đề xuất routing cần duyệt**\n');
+    lines.push('🔄 **Đề xuất Routing:**');
+    manualPlans.slice(0, 3).forEach((p) => { lines.push(`   • ${formatPlanDetail(p)}`); });
+    if (manualPlans.length > 3) lines.push(`   • ...và ${manualPlans.length - 3} kế hoạch khác`);
+    lines.push('');
+  }
+
+  // ── Maintenance suggestions ───────────────────────────────────────────────
   if (maintenance.length > 0) {
-    lines.push('🔧 **Đề xuất Bảo trì:**');
-    for (let i = 0; i < Math.min(maintenance.length, 3); i += 1) {
-      const maint = maintenance[i] as Record<string, unknown>;
-      const productCode = String(maint.product_code || '');
-      const skuCode = String(maint.sku_code || '');
-      const detail = String(maint.detail || '');
-
+    lines.push('🔧 **Đề xuất Bảo trì cần duyệt:**');
+    maintenance.slice(0, 3).forEach((m) => {
+      const productCode = String(m.product_code || '');
+      const skuCode = String(m.sku_code || '');
+      const detail = String(m.detail || '');
       let detailStr = `${productCode}/${skuCode}`;
-      if (detail) {
-        detailStr += ` — ${detail}`;
-      }
+      if (detail) detailStr += ` — ${detail}`;
       lines.push(`   • ${detailStr}`);
-    }
-    if (maintenance.length > 3) {
-      lines.push(`   • ...và ${maintenance.length - 3} bảo trì khác`);
-    }
+    });
+    if (maintenance.length > 3) lines.push(`   • ...và ${maintenance.length - 3} bảo trì khác`);
     lines.push('');
   }
 
-  lines.push('💡 **Hành động:**');
-  lines.push('   • Gõ "xem pending" để xem chi tiết');
-  lines.push('   • Admin: duyệt/từ chối ngay hoặc vào Dashboard');
+  // ── Action footer — only when human approval is needed ────────────────────
+  if (manualPlans.length > 0 || maintenance.length > 0) {
+    lines.push('💡 **Hành động:**');
+    lines.push('   • Gõ "xem pending" để xem chi tiết');
+    lines.push('   • Admin: duyệt/từ chối ngay hoặc vào Dashboard');
+  }
 
   return lines.join('\n');
 }
@@ -137,18 +149,41 @@ function ChatBubbleRow({
 }
 
 export function ChatWidget() {
+  const scrollNavCtx = useScrollNav();
+  const { session } = useAuth();
+  const micAllowed = session?.micAllowed ?? true;
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  // Load persisted history for current user
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    if (!session?.name) return [];
+    try {
+      const raw = localStorage.getItem(chatHistoryStorageKey(session.name));
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as ChatMessage[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [input, setInput] = useState('');
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  const [sessionId] = useState(() => crypto.randomUUID());
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
-  const [userProfile, setUserProfile] = useState<ChatUserProfile>({});
+  // Profile cố định từ login — không thay đổi trong chat
+  const staticProfile = session?.name
+    ? (() => {
+        const p = inferProfileFromSingleMessage(session.name);
+        if (!p.displayName) p.displayName = session.name;
+        return p;
+      })()
+    : {};
+  const [userProfile] = useState<ChatUserProfile>(staticProfile);
   const [speechPrimed, setSpeechPrimed] = useState(false);
   const speechPrimingRef = useRef(false);
-  const userProfileRef = useRef<ChatUserProfile>({});
-  const introShownRef = useRef(false);
-  const initialLoadRef = useRef(true); // Track if this is initial page load
+  const userProfileRef = useRef<ChatUserProfile>(staticProfile);
+  // If history was loaded from storage, skip the intro message
+  const introShownRef = useRef(messages.length > 0);
   const feedRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const widgetRef = useRef<HTMLDivElement>(null);
@@ -244,72 +279,35 @@ export function ChatWidget() {
     setInput('');
     voiceRef.current?.setTranscript('');
 
-    const prevProfile = userProfileRef.current;
-    const userTexts = [
-      ...messagesRef.current.filter((m) => m.role === 'user').map((m) => m.text),
-      trimmed,
-    ];
-
-    let nextProfile: ChatUserProfile = prevProfile;
-
-    if (shouldHandleAsProfileUpdate(trimmed, true)) {
-      nextProfile = applyProfileUpdate(prevProfile, trimmed);
-    }
-    nextProfile = mergeProfileFromUserTexts(userTexts, nextProfile);
-
-    const latest = inferProfileFromSingleMessage(trimmed);
-    if (latest.displayName) nextProfile.displayName = latest.displayName;
-    if (latest.honorific) nextProfile.honorific = latest.honorific;
-    if (latest.gender) nextProfile.gender = latest.gender;
-    if (latest.ageGroup) nextProfile.ageGroup = latest.ageGroup;
-
-    if (
-      profileChanged(prevProfile, nextProfile) &&
-      nextProfile.displayName &&
-      nextProfile.displayName !== prevProfile.displayName
-    ) {
-      const newSessionId = crypto.randomUUID();
-      sessionIdRef.current = newSessionId;
-      setSessionId(newSessionId);
-    }
-
-    userProfileRef.current = nextProfile;
-    setUserProfile(nextProfile);
+    const profile = userProfileRef.current;
 
     const chatPayload = {
       message: trimmed,
       sessionId: sessionIdRef.current,
-      userDisplayName: userBubbleLabel(nextProfile),
+      userDisplayName: userBubbleLabel(profile),
       inputSource: opts?.inputSource ?? 'text',
       sttRaw: opts?.sttRaw,
     };
 
-    let localAssistantReply: ChatMessage | null = null;
-    let callBackend = false;
-
-    if (shouldHandleAsProfileUpdate(trimmed, true)) {
-      // If it's a profile update (e.g., "Tên tôi là Khiêm"), handle it locally
-      localAssistantReply = appendMessage(
-        'assistant',
-        buildProfileUpdateReply(nextProfile, prevProfile, trimmed),
-      );
-    } else {
-      // Standard messages go to backend
-      callBackend = true;
-    }
-
-    setMessages((prev) => {
-      const withUser = [...prev, appendMessage('user', trimmed)];
-      return localAssistantReply ? [...withUser, localAssistantReply] : withUser;
-    });
-
-    if (callBackend) {
-      sendRef.current.mutate(chatPayload);
-    }
+    setMessages((prev) => [...prev, appendMessage('user', trimmed)]);
+    sendRef.current.mutate(chatPayload);
   }, []);
 
   const processUserMessageRef = useRef(processUserMessage);
   processUserMessageRef.current = processUserMessage;
+
+  // Persist chat history to localStorage whenever messages change
+  useEffect(() => {
+    if (!session?.name) return;
+    // Don't persist if only the intro message is present (no real conversation yet)
+    const hasRealMessages = messages.some((m) => m.role === 'user');
+    if (!hasRealMessages && messages.length <= 1) return;
+    try {
+      localStorage.setItem(chatHistoryStorageKey(session.name), JSON.stringify(messages));
+    } catch {
+      // storage full or unavailable — ignore
+    }
+  }, [messages, session?.name]);
 
   useEffect(() => {
     if (!open || introShownRef.current || messages.length > 0) return;
@@ -339,13 +337,10 @@ export function ChatWidget() {
     }
   }, [speechPrimed]);
 
-  const closeChat = useCallback(() => setOpen(false), []);
-
   const voiceCallbacksRef = useRef({
-    onCloseChat: closeChat,
+    onCloseChat: () => {},
     onEndSession: () => {},
   });
-  voiceCallbacksRef.current.onCloseChat = closeChat;
 
   const voiceRef = useRef<{ setTranscript: (t: string) => void; stop: () => void; ensureMicOn: () => void } | null>(
     null,
@@ -354,6 +349,7 @@ export function ChatWidget() {
   const handleAloWake = useCallback((remainder: string) => {
     setOpen(true);
     window.setTimeout(() => {
+      // Bật mic nếu chưa bật (khi đang bật rồi thì không restart)
       voiceRef.current?.ensureMicOn();
       if (remainder) {
         voiceRef.current?.setTranscript(remainder);
@@ -378,77 +374,83 @@ export function ChatWidget() {
 
   voiceRef.current = voice;
 
-  voiceCallbacksRef.current.onEndSession = () => {
+  // "đóng chat" và "tắt mic / bye bye" cùng hành vi: dừng mic + đóng chat
+  const endVoiceSession = () => {
     voiceRef.current?.stop();
     setOpen(false);
     setInput('');
     voiceRef.current?.setTranscript('');
   };
+  voiceCallbacksRef.current.onCloseChat = endVoiceSession;
+  voiceCallbacksRef.current.onEndSession = endVoiceSession;
 
   const wake = useOpsOneWake({
-    enabled: voice.supported && !voice.micOn,
+    enabled: (voice.supported && micAllowed) && !voice.micOn,
     speechPrimed,
     onWake: handleAloWake,
   });
 
-  // Listen for pending_suggestions SSE event and auto-open chat
+  // Auto-open chat with suggestions: on mount (immediate check) + on every new SSE cycle.
+  // Falls back to REST polling when SSE is buffered by a reverse proxy (GreenNode).
   useEffect(() => {
-    // Mark initial load as complete after component mounts
-    const markInitialLoadDone = setTimeout(() => {
-      initialLoadRef.current = false;
-    }, 10000);
-
     let es: EventSource | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let mounted = true;
+
+    const handleSuggestionData = (data: { has_suggestions?: boolean; [k: string]: unknown }) => {
+      if (!mounted || !data.has_suggestions) return;
+      setOpen(true);
+      const message = formatSuggestionSystemMessage(data);
+      if (message) {
+        setMessages((prev) => {
+          const lastMsg = prev[prev.length - 1];
+          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.text.includes('📢')) return prev;
+          return [...prev, appendMessage('assistant', message)];
+        });
+        requestAnimationFrame(() => scrollFeedToBottom());
+      }
+    };
+
+    // Immediate check on mount — open chat right away if suggestions already exist.
+    api<{ has_suggestions?: boolean }>('/suggestions')
+      .then(handleSuggestionData)
+      .catch(() => { /* ignore — SSE/poll will handle it */ });
+
+    // Fallback: poll REST endpoint every 30 s when SSE is unavailable.
+    const startFallbackPoll = () => {
+      if (pollTimer) return;
+      pollTimer = setInterval(async () => {
+        try {
+          const data = await api<{ has_suggestions?: boolean }>('/suggestions');
+          handleSuggestionData(data);
+        } catch { /* network error — try next tick */ }
+      }, 30_000);
+    };
 
     try {
-      const setupListener = () => {
-        es = new EventSource(eventsUrl());
-        es.addEventListener('pending_suggestions', (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.has_suggestions && !initialLoadRef.current) {
-              // Only auto-open chat if NOT initial page load
-              setOpen(true);
-
-              // Build system message
-              const message = formatSuggestionSystemMessage(data);
-              if (message) {
-                // Add system message to chat
-                setMessages((prev) => {
-                  // Check if we already have this message
-                  const lastMsg = prev[prev.length - 1];
-                  if (lastMsg && lastMsg.role === 'assistant' && lastMsg.text.includes('📢')) {
-                    return prev;
-                  }
-                  return [...prev, appendMessage('assistant', message)];
-                });
-                // Scroll to bottom
-                requestAnimationFrame(() => scrollFeedToBottom());
-              }
-            }
-          } catch {
-            // Silently ignore parse errors
-          }
-        });
-        es.onerror = () => {
-          es?.close();
-          es = null;
-        };
+      es = new EventSource(eventsUrl());
+      es.addEventListener('pending_suggestions', (event) => {
+        try { handleSuggestionData(JSON.parse(event.data) as { has_suggestions?: boolean }); }
+        catch { /* ignore parse errors */ }
+      });
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        startFallbackPoll(); // SSE failed → switch to polling
       };
-
-      setupListener();
     } catch {
-      // Silently ignore if EventSource is not available
+      startFallbackPoll();
     }
 
     return () => {
-      clearTimeout(markInitialLoadDone);
+      mounted = false;
       es?.close();
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, [scrollFeedToBottom]);
 
   useEffect(() => {
-    if (!voice.supported || speechPrimed) return;
+    if (!(voice.supported && micAllowed) || speechPrimed) return;
 
     const primeOnGesture = () => {
       void ensureSpeechPrimed();
@@ -464,13 +466,12 @@ export function ChatWidget() {
       document.removeEventListener('touchstart', primeOnGesture, opts);
       document.removeEventListener('keydown', primeOnGesture, opts);
     };
-  }, [voice.supported, speechPrimed, ensureSpeechPrimed]);
+  }, [(voice.supported && micAllowed), speechPrimed, ensureSpeechPrimed]);
 
-  /** Trình duyệt đã cấp mic trước đó → thử prime ngay khi load (F5 vẫn nghe "alo"). */
-  useEffect(() => {
-    if (!voice.supported || speechPrimed) return;
-    void ensureSpeechPrimed();
-  }, [voice.supported, speechPrimed, ensureSpeechPrimed]);
+  // Auto-prime removed: calling primeSpeechRecognition() on mount triggers the
+  // browser's native mic permission popup immediately on page load, even when
+  // the user already granted permission at login. Priming now only happens on
+  // first user gesture (pointerdown / keydown above).
 
   // Auto-refetch dashboard data every 1 minute (60 seconds) to keep UI up-to-date
   // This simulates automatic polling without reloading the page or losing chat history
@@ -545,6 +546,18 @@ export function ChatWidget() {
         finishDrag(e);
       }}
     >
+      {!open && scrollNavCtx.data && (
+        // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+        >
+          <RedSkuScrollNav
+            rows={scrollNavCtx.data.rows}
+            thresholdsByProduct={scrollNavCtx.data.thresholdsByProduct}
+          />
+        </div>
+      )}
       {open ? (
         <div
           className="chat-widget__panel"

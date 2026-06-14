@@ -5,8 +5,31 @@ USE opsone;
 SET NAMES utf8mb4;
 
 -- Agent settings
-INSERT INTO agent_settings (id, notification_recipients, agent_locale) VALUES
-  (1, '["ops-team@company.com"]', 'vi-VN');
+INSERT INTO agent_settings (id, notification_recipients, agent_locale, scheduler_interval_min, mock_scenario) VALUES
+  (1, '["khiemvt@vng.com.vn"]', 'vi-VN', 1, 'imedia_garena_pending');
+
+-- Voice phonetic domain map seeds
+INSERT INTO voice_phonetic_map (heard_pattern, canonical, category, priority) VALUES
+  ('i media',        'IMEDIA',        'provider', 10),
+  ('ai media',       'IMEDIA',        'provider', 10),
+  ('i me dia',       'IMEDIA',        'provider', 10),
+  ('e sale',         'ESALE',         'provider', 10),
+  ('shop pay',       'SHOPPAY',       'provider', 10),
+  ('the zing',       'ZING',          'product',  10),
+  ('the garena',     'GARENA',        'product',  10),
+  ('the vinaphone',  'VINAPHONE',     'product',  10),
+  ('the mobifone',   'MOBIFONE',      'product',  10),
+  ('the viettel',    'VIETTEL',       'product',  10),
+  ('nap vina',       'TOPUP_VINA',    'product',   8),
+  ('nap vinaphone',  'TOPUP_VINA',    'product',   8),
+  ('nap mobi',       'TOPUP_MOBI',    'product',   8),
+  ('nap mobifone',   'TOPUP_MOBI',    'product',   8),
+  ('nap viettel',    'TOPUP_VIETTEL', 'product',   8),
+  ('muoi nghin',     '10000',         'amount',    5),
+  ('10 nghin',       '10000',         'amount',    5),
+  ('hai muoi nghin', '20000',         'amount',    5),
+  ('nam muoi nghin', '50000',         'amount',    5),
+  ('mot tram nghin', '100000',        'amount',    5);
 
 -- Providers
 INSERT INTO providers (provider_code, label) VALUES

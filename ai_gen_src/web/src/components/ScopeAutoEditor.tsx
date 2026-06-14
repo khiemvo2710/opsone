@@ -175,7 +175,14 @@ export function ScopeAutoEditor({
       <div className="scope-auto-editor scope-auto-editor--compact">
         <span className="scope-auto-editor__summary-label muted">Chế độ BT / Routing</span>
         <div className="scope-auto-editor__summary-actions">
-          <span className="scope-auto-editor__summary-value" title={summaryTitle(initial)}>
+          <span
+            className="scope-auto-editor__summary-value"
+            title={
+              level === 'product'
+                ? `${savedLabel} — chế độ mặc định cho toàn dịch vụ (SKU có thể cấu hình riêng)`
+                : (summaryTitle(initial) ?? undefined)
+            }
+          >
             {savedLabel}
           </span>
           <button

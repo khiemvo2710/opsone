@@ -69,7 +69,10 @@ func (c *Collector) collectProductWithScopes(ctx context.Context, product domain
 
 	var scopeCtxs []ScopeContext
 	for _, sc := range scopes {
-		sctx, err := c.collectScope(ctx, sc, cycleID, window, th)
+		// Determine current routing pct for this provider/SKU so collectScope
+		// can skip breach evaluation when the provider has 0% traffic.
+		routingPct := providerRoutingPct(routing, sc.SKUCode, sc.ProviderCode)
+		sctx, err := c.collectScope(ctx, sc, cycleID, window, th, routingPct)
 		if err != nil {
 			return ProductContext{}, err
 		}
@@ -98,7 +101,7 @@ func (c *Collector) CollectProduct(ctx context.Context, product domain.Product, 
 	return c.collectProductWithScopes(ctx, product, scopes, cycleID, window)
 }
 
-func (c *Collector) collectScope(ctx context.Context, sc catalog.MetricScope, cycleID uint64, window string, th store.ProductThreshold) (ScopeContext, error) {
+func (c *Collector) collectScope(ctx context.Context, sc catalog.MetricScope, cycleID uint64, window string, th store.ProductThreshold, routingPct float64) (ScopeContext, error) {
 	out := ScopeContext{
 		ProductCode:  sc.ProductCode,
 		ServiceType:  string(sc.ServiceType),
@@ -118,6 +121,14 @@ func (c *Collector) collectScope(ctx context.Context, sc catalog.MetricScope, cy
 		out.Skipped = true
 		out.SkipReason = "maintenance_active"
 		out.State = "MAINTENANCE_ACTIVE"
+		return out, nil
+	}
+
+	// Skip breach evaluation for providers with 0% routing — they carry no live traffic
+	// so their metrics cannot affect service quality. Creating incidents for them is noise.
+	if routingPct == 0 {
+		out.Skipped = true
+		out.SkipReason = "zero_routing"
 		return out, nil
 	}
 
@@ -290,4 +301,17 @@ func isNoDataErr(err error) bool {
 		return te.Code == "no_data"
 	}
 	return false
+}
+
+// providerRoutingPct returns the current traffic_pct for a given provider+SKU
+// from the product's routing output. Returns 0 if not found.
+func providerRoutingPct(routing tools.GetRoutingOutput, sku, provider string) float64 {
+	if sku == "" {
+		// provider-level routing (topup products)
+		return routing.Routing[provider]
+	}
+	if skuMap, ok := routing.RoutingBySKU[sku]; ok {
+		return skuMap[provider]
+	}
+	return 0
 }

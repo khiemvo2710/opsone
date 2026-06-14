@@ -40,7 +40,14 @@ export function ProductMaintenanceActions({
   onExtendProduct,
 }: Props) {
   const [editing, setEditing] = useState(false);
-  const baseDraft = useMemo(() => initialExtendDraft(scopes), [scopes]);
+  // Use primitive values as deps so polling (new array references) doesn't close the form.
+  const firstStartsAt = scopes[0]?.startsAt ?? '';
+  const firstEndsAt = scopes[0]?.endsAt ?? '';
+  const baseDraft = useMemo(
+    () => initialExtendDraft(scopes),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [firstStartsAt, firstEndsAt, scopes.length],
+  );
   const [editDraft, setEditDraft] = useState(baseDraft);
   const [extendHint, setExtendHint] = useState<string | null>(null);
 
@@ -48,7 +55,7 @@ export function ProductMaintenanceActions({
     setEditDraft(baseDraft);
     setEditing(false);
     setExtendHint(null);
-  }, [baseDraft, scopes.length]);
+  }, [baseDraft]);
 
   if (scopes.length === 0) return null;
 

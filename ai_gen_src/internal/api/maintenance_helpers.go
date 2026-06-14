@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -153,7 +155,7 @@ func applyMaintenanceTargets(
 			SKU:         sku,
 			StartsAt:    startsAt,
 			EndsAt:      endsAt,
-			TriggerType: "admin_manual",
+			TriggerType: "manual_temp",
 			Reason:      reason,
 			Status:      "active",
 			Seq:         i,
@@ -215,6 +217,35 @@ func (s *Server) activeMaintenanceIDsForScope(ctx context.Context, product, sku 
 		}
 	}
 	return ids
+}
+
+// roundToInt100 rounds each value in m to an integer such that the total is exactly 100
+// (largest-remainder / Hamilton method).
+func roundToInt100(m map[string]float64) map[string]float64 {
+	result := make(map[string]float64, len(m))
+	type kv struct {
+		key string
+		rem float64
+	}
+	remainders := make([]kv, 0, len(m))
+	sum := 0.0
+	for k, v := range m {
+		fl := math.Floor(v)
+		result[k] = fl
+		sum += fl
+		remainders = append(remainders, kv{k, v - fl})
+	}
+	diff := int(math.Round(100 - sum))
+	sort.Slice(remainders, func(i, j int) bool {
+		if remainders[i].rem != remainders[j].rem {
+			return remainders[i].rem > remainders[j].rem
+		}
+		return remainders[i].key < remainders[j].key
+	})
+	for i := 0; i < diff && i < len(remainders); i++ {
+		result[remainders[i].key]++
+	}
+	return result
 }
 
 func parseFlexibleTime(raw string) (time.Time, error) {

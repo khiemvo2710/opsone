@@ -133,6 +133,23 @@ func (db *DB) CancelActiveMaintenanceForSKU(ctx context.Context, product, sku, c
 	return n, nil
 }
 
+// CancelActiveMaintenanceForSKUProvider cancels active/scheduled windows for a specific provider in a scope.
+func (db *DB) CancelActiveMaintenanceForSKUProvider(ctx context.Context, product, sku, provider, cancelledBy string) (int64, error) {
+	now := time.Now()
+	const query = `
+		UPDATE maintenance_windows
+		SET status = 'cancelled', cancelled_by = ?, cancelled_at = NOW()
+		WHERE product_code = ? AND sku_code = ? AND provider_code = ?
+		  AND status IN ('scheduled', 'active')
+		  AND ends_at > ?`
+	res, err := db.ExecContext(ctx, query, cancelledBy, product, sku, provider, now)
+	if err != nil {
+		return 0, fmt.Errorf("cancel maintenance provider: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // CancelMaintenanceByIDs cancels specific windows (dashboard maintenance_ids).
 func (db *DB) CancelMaintenanceByIDs(ctx context.Context, ids []string, cancelledBy string) (int64, error) {
 	if len(ids) == 0 {

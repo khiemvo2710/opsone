@@ -4,9 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 	"opsone/internal/notify"
 )
+
+// maintIDSeq is a process-wide counter that guarantees uniqueness of maintenance IDs
+// even when concurrent goroutines call SetMaintenance at the same microsecond.
+var maintIDSeq int64
 
 func normalizeMaintenanceTrigger(trigger string) string {
 	switch trigger {
@@ -118,21 +123,17 @@ func (r *Registry) SetMaintenance(ctx context.Context, in SetMaintenanceInput) (
 	}, nil
 }
 
-// buildMaintenanceID returns a unique maintenance_id (<= 32 chars) per provider + seq.
-func buildMaintenanceID(provider string, seq int, now time.Time) string {
+// buildMaintenanceID returns a globally unique maintenance_id (<= 32 chars).
+// Combines timestamp + provider + a monotonic process-wide counter to guarantee
+// uniqueness even when concurrent goroutines create IDs at the same microsecond.
+func buildMaintenanceID(provider string, _ int, now time.Time) string {
 	prov := strings.ToUpper(strings.TrimSpace(provider))
 	if len(prov) > 6 {
 		prov = prov[:6]
 	}
-	if seq < 0 {
-		seq = 0
-	}
-	if seq > 99 {
-		seq = seq % 100
-	}
-	ms := now.Nanosecond() / 1_000_000
-	// MT + yyMMddHHmmss (12) + provider (<=6) + seq (2) + ms (3) => max 25 chars
-	id := fmt.Sprintf("MT%s%s%02d%03d", now.Format("060102150405"), prov, seq, ms)
+	n := atomic.AddInt64(&maintIDSeq, 1) % 10000 // 4-digit counter, wraps at 10000
+	// MT + yyMMddHHmmss (12) + provider (<=6) + counter (4) => max 24 chars
+	id := fmt.Sprintf("MT%s%s%04d", now.Format("060102150405"), prov, n)
 	if len(id) > 32 {
 		id = id[:32]
 	}

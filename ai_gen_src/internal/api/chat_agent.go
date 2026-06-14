@@ -497,7 +497,7 @@ func (s *Server) chatExecTool(ctx context.Context, sessionID, name, argsJSON, ac
 		if sku != "" {
 			sku = chatresolve.NormalizeSKU(sku)
 		}
-		msg, err := s.chatReopenService(ctx, strArg(args, "product"), sku, actor)
+		msg, err := s.chatReopenService(ctx, strArg(args, "product"), sku, strArg(args, "provider"), actor)
 		return map[string]any{"message": msg}, err
 	case "set_scope_auto":
 		if !isAdmin {

@@ -7,6 +7,7 @@ import (
 )
 
 var durationMinPattern = regexp.MustCompile(`(\d+)\s*(?:phut|p|min|minutes?)`)
+var percentPattern = regexp.MustCompile(`(\d{1,3})\s*(?:%|phan tram|phần trăm|percent)`)
 
 var approveTokens = []string{
 	"duyet", "dong y", "ok", "approve", "yes",
@@ -175,6 +176,104 @@ func IsSetMaintenanceCommand(msg string) bool {
 	return strings.Contains(key, "bat bao tri")
 }
 
+// allScopeTokens — broad terms meaning "all" or "whole system".
+var allScopeTokens = []string{
+	"tat ca", "toan bo", "toan he thong", "moi ", "all ",
+}
+
+// allObjectTokens — terms meaning "services / products".
+var allObjectTokens = []string{
+	"dich vu", "san pham", "dv", "sp", "service",
+}
+
+// serviceTypeTokens — service-type words that act as the "object" in phrases like
+// "tất cả thẻ", "tất cả topup", "tất cả data".
+// Includes "top up" (space) and common STT mishears ("tot ap", "top ap").
+var serviceTypeTokens = []string{
+	"topup", "top up", "tot ap", "top ap", "cap ap", " nap", " data",
+}
+
+// isAllServicesPhrase returns true when the key contains an "all" word AND a "service"
+// (or service-type) word, regardless of words in between.
+func isAllServicesPhrase(key string) bool {
+	hasScope := containsAny(key, allScopeTokens)
+	if !hasScope {
+		return strings.Contains(key, "toan he thong")
+	}
+	if containsAny(key, allObjectTokens) {
+		return true
+	}
+	// "tất cả thẻ" / "tất cả topup" / "tất cả data"
+	if containsAny(key, serviceTypeTokens) {
+		return true
+	}
+	// "the" at end of string or surrounded by spaces (thẻ / card)
+	if strings.HasSuffix(key, " the") || strings.Contains(key, " the ") {
+		return true
+	}
+	return false
+}
+
+// ExtractAllServicesFilters returns the set of service_type filters when the user
+// qualifies "tất cả" with one or more service types ("thẻ", "topup", "data").
+// Multiple types can appear in one message: "data và top up" → ["topup_data","topup"].
+// Returns nil (empty) when no type qualifier is found → caller treats as "all services".
+func ExtractAllServicesFilters(msg string) []string {
+	key := trimMsgKey(msg)
+	seen := map[string]bool{}
+	var filters []string
+	add := func(f string) {
+		if !seen[f] {
+			seen[f] = true
+			filters = append(filters, f)
+		}
+	}
+	if containsAny(key, []string{"topup", "top up", "tot ap", "top ap", "cap ap", " nap"}) {
+		add("topup")
+	}
+	if strings.Contains(key, " data") || strings.HasSuffix(key, "data") {
+		add("topup_data")
+	}
+	if strings.HasSuffix(key, " the") || strings.Contains(key, " the ") {
+		add("card")
+	}
+	return filters
+}
+
+// IsSetAllMaintenanceCommand is true when the user wants to put ALL services into maintenance.
+// Returns false when a specific product is named — e.g. "bảo trì tất cả thẻ Garena" is
+// a per-product command (all SKUs of Garena), not a global all-services command.
+func IsSetAllMaintenanceCommand(msg string) bool {
+	key := trimMsgKey(msg)
+	if !strings.Contains(key, "bao tri") && !strings.Contains(key, " bt") {
+		return false
+	}
+	if IsReopenServiceCommand(msg) {
+		return false
+	}
+	if !isAllServicesPhrase(key) {
+		return false
+	}
+	// A named product → product-scoped command, not global.
+	if ExtractProductFromText(msg) != "" {
+		return false
+	}
+	return true
+}
+
+// IsReopenAllServicesCommand is true when the user wants to cancel ALL maintenance / reopen everything.
+// Returns false when a specific product is named.
+func IsReopenAllServicesCommand(msg string) bool {
+	key := trimMsgKey(msg)
+	if !containsAny(key, reopenTokens) || !isAllServicesPhrase(key) {
+		return false
+	}
+	if ExtractProductFromText(msg) != "" {
+		return false
+	}
+	return true
+}
+
 // IsSetScopeAutoCommand asks to change routing/maintenance auto mode.
 func IsSetScopeAutoCommand(msg string) bool {
 	key := trimMsgKey(msg)
@@ -218,15 +317,45 @@ func ExtractDurationMinutes(msg string) int {
 	return n
 }
 
-// ExtractProviderFromText finds ESALE|IMEDIA|SHOPPAY in message.
+// ExtractProviderFromText finds ESALE|IMEDIA|SHOPPAY in message, including STT aliases.
 func ExtractProviderFromText(msg string) string {
-	key := strings.ToUpper(NormalizeKey(msg))
+	key := NormalizeKey(msg)
+	// Check STT aliases first (e.g. "excel"→ESALE, "ai media"→IMEDIA)
+	if code, ok := staticProviderAliases[key]; ok {
+		return code
+	}
+	for alias, code := range staticProviderAliases {
+		if strings.Contains(key, alias) {
+			return code
+		}
+	}
+	// Exact uppercase match
+	upper := strings.ToUpper(key)
 	for _, p := range []string{"ESALE", "IMEDIA", "SHOPPAY"} {
-		if strings.Contains(key, p) {
+		if strings.Contains(upper, p) {
 			return p
 		}
 	}
 	return ""
+}
+
+// ExtractProviderPct returns the percentage (0–100) following a provider mention.
+// E.g. "qua ai Media 100%" → ("IMEDIA", 100). Returns ("", -1) if not found.
+func ExtractProviderPct(msg string) (provider string, pct int) {
+	provider = ExtractProviderFromText(msg)
+	if provider == "" {
+		return "", -1
+	}
+	key := NormalizeKey(msg)
+	m := percentPattern.FindStringSubmatch(key)
+	if len(m) < 2 {
+		return provider, -1
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n < 0 || n > 100 {
+		return provider, -1
+	}
+	return provider, n
 }
 
 // ScopeAutoModeLabel returns Vietnamese label for auto_action.

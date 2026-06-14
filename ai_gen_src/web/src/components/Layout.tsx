@@ -2,8 +2,11 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { ASSISTANT_NAME } from '../utils/assistantIdentity';
 import { HealthBadge } from './HealthBadge';
 import { ChatWidget } from './ChatWidget';
+import { ChatAvatar } from './ChatAvatar';
 import { useSSE } from '../hooks/useSSE';
 import { useOverallHealth } from '../hooks/useOverallHealth';
+import { useAuth } from '../context/AuthContext';
+import { inferProfileFromSingleMessage } from '../utils/chatUserProfile';
 
 const NAV = [
   { to: '/', label: 'Dashboard', end: true },
@@ -15,6 +18,15 @@ const NAV = [
 export function Layout() {
   useSSE();
   const overallHealth = useOverallHealth();
+  const { session, logout } = useAuth();
+
+  const userProfile = session?.name
+    ? (() => {
+        const p = inferProfileFromSingleMessage(session.name);
+        if (!p.displayName) p.displayName = session.name;
+        return p;
+      })()
+    : {};
 
   return (
     <div className="app-shell">
@@ -49,6 +61,23 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
+
+        {session && (
+          <div className="app-header__user">
+            <div className="app-header__user-avatar">
+              <ChatAvatar role="user" userProfile={userProfile} sessionSeed={session.name} />
+            </div>
+            <span className="app-header__user-name">{session.name}</span>
+            <button
+              type="button"
+              className="app-header__logout-btn"
+              onClick={logout}
+              title="Đăng xuất"
+            >
+              Đăng xuất
+            </button>
+          </div>
+        )}
       </header>
 
       <main className="main-content">

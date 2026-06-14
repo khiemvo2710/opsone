@@ -12,6 +12,7 @@ import (
 	"opsone/internal/catalog"
 	"opsone/internal/chatresolve"
 	"opsone/internal/mock"
+	"opsone/internal/notify"
 	"opsone/internal/output"
 	"opsone/internal/store"
 	"opsone/internal/tools"
@@ -246,6 +247,18 @@ func (s *Server) handleRoutingPlanApprove(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:      plan.ProductCode,
+			SKU:          plan.SKUCode,
+			HealthStatus: "green",
+			TriggerEvent: "routing_applied",
+			ActionSummary: fmt.Sprintf("Admin duyệt routing plan #%d — %s/%s",
+				id, plan.ProductCode, plan.SKUCode),
+			Actor:     by,
+			DedupeKey: fmt.Sprintf("routing_plan_approve:%d", id),
+		})
+	}()
 	writeJSON(w, http.StatusOK, map[string]any{"plan_id": id, "applied": out.Applied, "change_log_ids": out.ChangeLogIDs})
 }
 
@@ -275,6 +288,19 @@ func (s *Server) handleRoutingPlanReject(w http.ResponseWriter, r *http.Request,
 			ResolutionAction: "admin_reject",
 		})
 	}
+	rejectBy := actorFromRequest(r, s.Config.DevAuthBypass)
+	go func() {
+		_ = s.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+			Product:      plan.ProductCode,
+			SKU:          plan.SKUCode,
+			HealthStatus: "yellow",
+			TriggerEvent: "routing_applied",
+			ActionSummary: fmt.Sprintf("Admin từ chối routing plan #%d — %s/%s (giữ nguyên routing hiện tại)",
+				id, plan.ProductCode, plan.SKUCode),
+			Actor:     rejectBy,
+			DedupeKey: fmt.Sprintf("routing_plan_reject:%d", id),
+		})
+	}()
 	writeJSON(w, http.StatusOK, map[string]any{"plan_id": id, "status": "rejected"})
 }
 
@@ -496,17 +522,38 @@ func (s *Server) handleChatPost(w http.ResponseWriter, r *http.Request) {
 	}
 	isAdmin := requireAdminSilent(r, s.Config.DevAuthBypass)
 	actor := actorFromRequest(r, s.Config.DevAuthBypass)
+
+	// P5: Apply voice corrections before routing (corrected message used for intent detection).
+	inputSrc := parseChatInputSource(body.InputSource)
+	effectiveMsg := body.Message
+	if inputSrc == store.ChatInputVoice {
+		effectiveMsg = s.applyVoiceCorrectionToInput(r.Context(), body.Message)
+	}
+
+	// P5: Record STT correction if voice input differs from transcript.
+	sttRaw := strings.TrimSpace(body.STTRaw)
+	if inputSrc == store.ChatInputVoice && sttRaw != "" {
+		s.recordVoiceCorrection(r.Context(), sttRaw, body.Message)
+	}
+
+	sessionID := strings.TrimSpace(body.SessionID)
+
+	// P5: Detect retry signal — mark previous interaction as wrong_route if similar message.
+	if sessionID != "" {
+		s.detectAndMarkRetry(r.Context(), sessionID, effectiveMsg)
+	}
+
 	turnInput := ChatTurnInput{
-		SessionID:   strings.TrimSpace(body.SessionID),
+		SessionID:   sessionID,
 		UserID:      actor,
-		Message:     body.Message,
-		STTRaw:      strings.TrimSpace(body.STTRaw),
-		InputSource: parseChatInputSource(body.InputSource),
+		Message:     effectiveMsg,
+		STTRaw:      sttRaw,
+		InputSource: inputSrc,
 		IsAdmin:     isAdmin,
 	}
 	out := &ChatTurnOutcome{ActionResult: store.ChatActionSuccess}
 	start := time.Now()
-	reply, err := s.chatAgentReply(r.Context(), turnInput.SessionID, body.Message, strings.TrimSpace(body.UserDisplayName), actor, isAdmin, out)
+	reply, err := s.chatAgentReply(r.Context(), turnInput.SessionID, effectiveMsg, strings.TrimSpace(body.UserDisplayName), actor, isAdmin, out)
 	latencyMS := int(time.Since(start).Milliseconds())
 	if err != nil {
 		out.ActionResult = store.ChatActionError

@@ -15,14 +15,19 @@ import (
 
 // Reasoner runs rules + generates outputs (Phase 4, §7–§8).
 type Reasoner struct {
-	DB     *store.DB
-	Rules  rules.Engine
-	Notify *notify.Service
+	DB           *store.DB
+	Rules        rules.Engine
+	Notify       *notify.Service
+	DashboardURL string
 }
 
 // NewReasoner creates a reasoner.
-func NewReasoner(db *store.DB, n *notify.Service) *Reasoner {
-	return &Reasoner{DB: db, Rules: rules.Engine{}, Notify: n}
+func NewReasoner(db *store.DB, n *notify.Service, dashboardURL ...string) *Reasoner {
+	url := "http://localhost:5173"
+	if len(dashboardURL) > 0 && dashboardURL[0] != "" {
+		url = dashboardURL[0]
+	}
+	return &Reasoner{DB: db, Rules: rules.Engine{}, Notify: n, DashboardURL: url}
 }
 
 // Process runs rules engine and persists Incident / RoutingPlan / Recommendation.
@@ -175,6 +180,30 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 				FailBefore: failBefore, Summary: summary,
 			}); err != nil {
 				return err
+			}
+			// Send one-time incident alert email (dedup key = incident ID → sent exactly once).
+			if r.Notify != nil {
+				reasons := append([]string(nil), thRes.BreachReasons...) // copy before goroutine
+				deepLink := fmt.Sprintf("%s/incidents", r.DashboardURL)
+				go func(iid, prod, prov, sku, sum, dl string, sr, pr, fr float64, cycID uint64, br []string) {
+					_ = r.Notify.SendIfNeeded(context.Background(), notify.EmailParams{
+						Product:       prod,
+						Provider:      prov,
+						SKU:           sku,
+						HealthStatus:  "red",
+						TriggerEvent:  "incident_open",
+						SuccessRate:   sr,
+						PendingRate:   pr,
+						FailRate:      fr,
+						BreachReasons: br,
+						ActionSummary: sum,
+						IncidentID:    iid,
+						CycleID:       &cycID,
+						DedupeKey:     "incident:" + iid,
+						DeepLinkURL:   dl,
+					})
+				}(incID, pc.Product.Label, worst.ProviderCode, worst.SKUCode,
+					summary, deepLink, m.SuccessRate, m.PendingRate, m.FailRate, cycleID, reasons)
 			}
 		}
 		pc.LastIncidentID = incID
@@ -465,12 +494,21 @@ func (r *Reasoner) autoResolveHealthyScopes(ctx context.Context, cycleID uint64,
 		return nil
 	}
 
-	// Fallback: resolve individual healthy scopes.
+	// Fallback: resolve individual healthy scopes even when the product as a whole
+	// is not yet NORMAL (e.g. one SKU recovered while another is still monitored).
 	for _, s := range pc.Scopes {
 		if s.Skipped || s.Threshold == nil || s.Threshold.Breached {
 			continue
 		}
-		// ... existing per-scope resolution (already handled by product-level above if state is NORMAL)
+		incID, err := r.DB.FindOpenIncidentForScope(ctx, s.ProductCode, s.SKUCode, nil)
+		if err == nil && incID != "" {
+			_ = r.DB.UpdateIncidentHandled(ctx, incID, store.IncidentHandleUpdate{
+				Status:           "resolved",
+				HandledBy:        "opsone-agent",
+				ResolutionAction: "Tự động đóng: Scope đã ổn định",
+			})
+			_ = r.DB.DeleteRecommendationsForScope(ctx, s.ProductCode, s.SKUCode)
+		}
 	}
 	return nil
 }

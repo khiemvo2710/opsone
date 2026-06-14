@@ -14,6 +14,8 @@ const (
 	UIActionReopenService   UIActionKey = "reopen_service"
 	UIActionRestoreBaseline UIActionKey = "restore_baseline"
 	UIActionSetScopeAuto    UIActionKey = "set_scope_auto"
+	UIActionSetAllMaintenance  UIActionKey = "set_all_maintenance"
+	UIActionReopenAllServices  UIActionKey = "reopen_all_services"
 )
 
 // UIActionMeta describes one operable UI action for chat/voice.
@@ -35,6 +37,8 @@ func AllUIActions() []UIActionMeta {
 		{UIActionReopenService, "Mở lại dịch vụ", "mở lại thẻ Garena 10.000", true, "Mở lại dịch vụ"},
 		{UIActionRestoreBaseline, "Trả lại routing baseline", "trả lại routing baseline thẻ Garena ESALE", true, "Trả lại / Mở lại provider"},
 		{UIActionSetScopeAuto, "Đổi chế độ BT/Routing", "đặt thẻ Garena chế độ tự động", true, "Chế độ BT / Routing · Lưu"},
+		{UIActionSetAllMaintenance, "Bảo trì tất cả dịch vụ", "bảo trì tất cả dịch vụ", true, "Bảo trì toàn hệ thống"},
+		{UIActionReopenAllServices, "Mở lại tất cả dịch vụ", "mở lại tất cả dịch vụ", true, "Mở lại toàn hệ thống"},
 	}
 }
 

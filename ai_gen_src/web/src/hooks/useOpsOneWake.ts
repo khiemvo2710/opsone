@@ -95,7 +95,8 @@ export function useOpsOneWake({
       if (now - lastWakeAtRef.current < WAKE_COOLDOWN_MS) return;
       lastWakeAtRef.current = now;
 
-      const remainder = stripAloWakePrefix(transcript);
+      // "mở chat" / "bật mic" etc. are pure commands — no remainder to pass
+      const remainder = matchesMicOnPhrase(transcript) ? '' : stripAloWakePrefix(transcript);
       stop();
       onWakeRef.current(remainder);
     },

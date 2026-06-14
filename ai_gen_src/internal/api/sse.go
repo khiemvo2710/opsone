@@ -7,6 +7,22 @@ import (
 	"time"
 )
 
+// handleSuggestions is a REST fallback for clients that cannot use SSE
+// (e.g., when a reverse proxy buffers the event stream).
+// GET /api/v1/suggestions → same payload as the SSE pending_suggestions event.
+func (s *Server) handleSuggestions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
+		return
+	}
+	data, err := s.getPendingSuggestionsForSSE(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -17,6 +33,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable nginx proxy buffering for SSE
 
 	var lastCycle uint64
 	var lastSuggestionCheck int64 // Track if we already sent suggestions in this second
