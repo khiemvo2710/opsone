@@ -6757,3 +6757,77 @@ mysql "$DATABASE_URL" -e "DELETE FROM mock_metrics WHERE recorded_at < NOW() - I
 
 ---
 
+# Part IX — Changelog (Post-launch fixes)
+
+## 16/06/2026 — Bug fixes & missing implementations
+
+### 16.1 Missing store & agent files (build errors)
+
+Các file bị thiếu khi get code từ git, gây lỗi build. Đã tạo mới:
+
+**`internal/store/baseline.go`** — Baseline anomaly detection:
+- `GetBaseline(ctx, product, sku, provider)` — lấy baseline theo `hour_of_week` hiện tại từ `metric_baseline_hourly`
+- `BaselineDeviation(successRate, baseline)` — tính số sigma lệch so với mean
+- `UpsertBaseline(ctx, row)` — ghi kết quả aggregation
+- `ListPendingVerify(ctx)` — routing verifications chờ check từ `routing_action_verify`
+- `FindCurrentMetricsForScope(ctx, product, sku)` — trung bình success/pending 10 phút gần nhất
+- `UpdateVerifyResult(ctx, id, postSuccess, postPending, status, escalated)` — ghi kết quả verify
+
+**`internal/agent/baseline.go`** — `BaselineJob.RunOnce(ctx)`:
+- Aggregate 28 ngày mock_metrics → `metric_baseline_hourly` theo `(product, sku, provider, hour_of_week)`
+- Chạy mỗi 60 cycles (≈ 1 giờ khi interval=1min)
+
+**`internal/store/voice.go`** — Voice correction & phonetic:
+- `GetVoiceCorrections` / `UpsertVoiceCorrection` / `ApplyVoiceCorrections` — STT learned corrections từ `chat_voice_corrections`
+- `GetPhoneticEntries` / `ApplyPhoneticEntries` / `ApplyDomainPhonetic` — phonetic map Vietnamese domain
+- `FindRecentInteraction` / `DetectRetrySignal` / `MarkInteractionWrongRoute` — retry detection
+- Admin CRUD: `ListVoiceCorrections`, `ListChatCommandPatterns`, `UpdateChatCommandPatternStatus`, `ListFewShotExamples`, `InsertFewShotExample`, `UpdateFewShotStatus`
+
+**`internal/api/chat_admin_patterns.go`** — Admin endpoints còn thiếu:
+- `routeAdminChatPatterns` → `GET/POST /api/v1/admin/chat-patterns`
+- `routeAdminFewShot` → `GET/POST /api/v1/admin/few-shot`
+- `handleAdminVoiceCorrectionsList` → `GET /api/v1/admin/voice-corrections`
+
+**`internal/api/chat_feedback.go`** + `store/chat_log.go#InsertChatFeedback`:
+- `handleChatFeedback` → `POST /api/v1/chat/feedback` (rating: up/down/corrected)
+
+---
+
+### 16.2 Bug: Agent đề xuất routing cho SKU đang bảo trì
+
+**File:** `internal/agent/reasoning.go`
+
+**Nguyên nhân:** Code chỉ check `HasPendingMaintenanceRecommendation` (có *đề xuất* bảo trì pending chưa) nhưng không check SKU đang trong **active maintenance window** thực tế.
+
+**Fix:** Trong `case "routing":`, trước khi `BuildRoutingPlan`, thêm:
+```go
+activeMaint, err := r.DB.CountActiveMaintenanceForSKU(ctx, product, sku)
+if activeMaint > 0 {
+    _ = r.DB.CancelPendingRoutingPlansForScope(ctx, product, sku) // cancel plan cũ
+    break
+}
+```
+
+**Hành vi sau fix:**
+- SKU đang bảo trì → agent không tạo routing plan mới
+- Plan cũ còn pending trong DB → bị cancel ngay ở cycle tiếp theo
+- Khi bảo trì kết thúc → agent xét lại bình thường
+
+---
+
+### 16.3 Bug: Chat "duyệt" chỉ approve 1 trong nhiều đề xuất
+
+**Files:** `internal/api/chat_commands.go`, `internal/api/chat_actions.go`
+
+**Nguyên nhân:** `chatSessionFocusFromPending()` chỉ lấy `plans[0]` — phần tử đầu tiên của danh sách pending.
+
+**Fix:** Khi user nói "duyệt" / "từ chối" mà **không chỉ định product cụ thể** → gọi `chatApproveAllPending` / `chatRejectAllPending` loop qua toàn bộ routing plans + maintenance suggestions và apply tuần tự.
+
+**Hành vi sau fix:**
+- "duyệt" (không kèm tên product) → approve tất cả pending items
+- "từ chối" → reject tất cả pending items
+- "duyệt garena 10000" → vẫn chỉ approve đúng SKU đó (không đổi)
+- Reply trả về tổng kết: *"Đã duyệt N đề xuất: ..."*
+
+---
+
