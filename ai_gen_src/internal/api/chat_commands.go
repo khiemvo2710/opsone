@@ -120,15 +120,26 @@ func (s *Server) tryChatApproveRejectReply(
 			return formatChatActionReply("Không tra được pending.", err.Error(), ""), true
 		}
 		data, _ := raw.(map[string]any)
-		focus = chatSessionFocusFromPending(data)
-		if focus.Kind == "" {
+
+		// Khi không chỉ định product cụ thể → áp dụng cho TẤT CẢ pending items
+		var msg string
+		if reject {
+			msg, err = s.chatRejectAllPending(ctx, data, actor)
+		} else {
+			msg, err = s.chatApproveAllPending(ctx, data, actor)
+		}
+		if err != nil {
+			return formatChatActionReply("Không thực hiện được.", err.Error(), ""), true
+		}
+		if msg == "" {
 			return formatChatActionReply(
 				"Không thực hiện được.",
 				"Không có đề xuất pending.",
 				"Nói \"xem pending\" để liệt kê.",
 			), true
 		}
-		chatSessionFocusSet(sessionID, focus)
+		chatSessionFocusClear(sessionID)
+		return formatChatActionReply(msg, "", ""), true
 	}
 
 	var msg string

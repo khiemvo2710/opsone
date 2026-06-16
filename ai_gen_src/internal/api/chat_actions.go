@@ -472,3 +472,113 @@ func (s *Server) chatRejectScopeMaintenance(ctx context.Context, product, sku, a
 	_ = actor
 	return fmt.Sprintf("Đã từ chối đề xuất bảo trì %s/%s", product, sku), nil
 }
+
+// chatApproveAllPending approves every pending routing plan and maintenance suggestion.
+func (s *Server) chatApproveAllPending(ctx context.Context, data map[string]any, actor string) (string, error) {
+	plans, _ := data["routing_plans"].([]map[string]any)
+	maints, _ := data["maintenance_suggestions"].([]map[string]any)
+	if len(plans) == 0 && len(maints) == 0 {
+		return "", nil
+	}
+
+	var done, failed int
+	var msgs []string
+
+	for _, p := range plans {
+		product := strAny(p, "product_code")
+		sku := strAny(p, "sku_code")
+		var planID uint64
+		if id, ok := p["plan_id"].(float64); ok {
+			planID = uint64(id)
+		}
+		var msg string
+		var err error
+		if planID > 0 {
+			msg, err = s.chatApproveRoutingPlan(ctx, planID, actor, nil)
+		} else {
+			msg, err = s.chatApproveScopeRouting(ctx, product, sku, actor, nil)
+		}
+		if err != nil {
+			failed++
+		} else {
+			done++
+			msgs = append(msgs, msg)
+		}
+	}
+
+	for _, m := range maints {
+		product := strAny(m, "product_code")
+		sku := strAny(m, "sku_code")
+		msg, err := s.chatApproveScopeMaintenance(ctx, product, sku, actor, "", "", 0)
+		if err != nil {
+			failed++
+		} else {
+			done++
+			msgs = append(msgs, msg)
+		}
+	}
+
+	if done == 0 {
+		return "", fmt.Errorf("không thể duyệt được đề xuất nào (%d lỗi)", failed)
+	}
+	summary := fmt.Sprintf("Đã duyệt %d đề xuất", done)
+	if failed > 0 {
+		summary += fmt.Sprintf(" (%d thất bại)", failed)
+	}
+	return summary + ":\n" + strings.Join(msgs, "\n"), nil
+}
+
+// chatRejectAllPending rejects every pending routing plan and maintenance suggestion.
+func (s *Server) chatRejectAllPending(ctx context.Context, data map[string]any, actor string) (string, error) {
+	plans, _ := data["routing_plans"].([]map[string]any)
+	maints, _ := data["maintenance_suggestions"].([]map[string]any)
+	if len(plans) == 0 && len(maints) == 0 {
+		return "", nil
+	}
+
+	var done, failed int
+	var msgs []string
+
+	for _, p := range plans {
+		product := strAny(p, "product_code")
+		sku := strAny(p, "sku_code")
+		var planID uint64
+		if id, ok := p["plan_id"].(float64); ok {
+			planID = uint64(id)
+		}
+		var msg string
+		var err error
+		if planID > 0 {
+			msg, err = s.chatRejectRoutingPlan(ctx, planID, actor)
+		} else {
+			msg, err = s.chatRejectScopeRouting(ctx, product, sku, actor)
+		}
+		if err != nil {
+			failed++
+		} else {
+			done++
+			msgs = append(msgs, msg)
+		}
+	}
+
+	for _, m := range maints {
+		product := strAny(m, "product_code")
+		sku := strAny(m, "sku_code")
+		msg, err := s.chatRejectScopeMaintenance(ctx, product, sku, actor)
+		if err != nil {
+			failed++
+		} else {
+			done++
+			msgs = append(msgs, msg)
+		}
+	}
+
+	if done == 0 {
+		return "", fmt.Errorf("không thể từ chối được đề xuất nào (%d lỗi)", failed)
+	}
+	summary := fmt.Sprintf("Đã từ chối %d đề xuất", done)
+	if failed > 0 {
+		summary += fmt.Sprintf(" (%d thất bại)", failed)
+	}
+	return summary + ":\n" + strings.Join(msgs, "\n"), nil
+}

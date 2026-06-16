@@ -220,6 +220,16 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 			if hasMaint {
 				break
 			}
+			// Không đề xuất routing khi SKU đang trong cửa sổ bảo trì thực tế
+			activeMaint, err := r.DB.CountActiveMaintenanceForSKU(ctx, pc.Product.ProductCode, worst.SKUCode)
+			if err != nil {
+				return err
+			}
+			if activeMaint > 0 {
+				// Cancel plan cũ còn pending (nếu có) để không hiển thị nhầm
+				_ = r.DB.CancelPendingRoutingPlansForScope(ctx, pc.Product.ProductCode, worst.SKUCode)
+				break
+			}
 			plan := BuildRoutingPlan(*pc, *worst, output.RoutingPlanReason(pc.Product.ProductCode, worst.ProviderCode, allEvidence), prodTh)
 			scope := plan.Scope
 			scopeAuto, _ := r.DB.ResolveEffectiveScopeAuto(ctx, pc.Product.ProductCode, worst.SKUCode)
