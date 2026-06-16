@@ -796,7 +796,7 @@ Hai nguồn trạng thái — **không trộn lẫn**:
 
 1. **Đề xuất mới (synthetic):** chỉ khi `snap.ShouldAct == true` (`consecutive >= required`) → `scopeSuggestionFromSnapshot`. Routing → `routingPlanResponse` (nếu đã có plan DB thì `UPDATE plan_json` rồi trả row DB; chưa có → synthetic `id: 0`, `suggested: true`).
 2. **Refresh plan DB (poll ~60s):** nếu scope còn plan `pending_approve`/`draft`, metric live **vẫn vi phạm** (`AnyBreached`) nhưng chưa đủ `ShouldAct` hoặc agent chưa chạy → `refreshPendingRoutingFromSnapshot` (không yêu cầu `ShouldAct`) → `UPDATE routing_plans.plan_json` → trả plan DB mới.
-3. **Hết vi phạm:** `CancelPendingRoutingPlansForScope` — ẩn hàng *Kế hoạch routing*.
+3. **Hết vi phạm (`!snap.AnyBreached`):** `CancelPendingRoutingPlansForScope` ngay trên poll — ẩn hàng *Kế hoạch routing*. Tương tự: (a) routing hiện tại đã khớp `proposed_pct` trong plan (`routingMatchesPlan`, tolerance 1%) → cancel; (b) plan đã bị `reject` **và** routing proposed giống reject cũ (`routingProposalSuppressedAfterReject`) → **cancel + ẩn** (trước đây chỉ ẩn, bây giờ phải cancel để DB sạch); (c) vừa có plan `executed` trong 30 phút (`COALESCE(approved_at, created_at) >= cutoff`) → cancel; (d) scope đang có cửa sổ bảo trì active → cancel routing plan ngay.
 4. **Cửa sổ bảo trì active:** **không** trả `pending_plan` (ưu tiên cột Bảo trì); cột provider disabled (mục 2 trên).
 5. **Chu kỳ vi phạm đầu** (`consecutive < required`): cột TT 🟡, **không** hàng đề xuất mới — trừ khi đã có plan DB từ chu kỳ trước (refresh mục 2).
 6. **`SKURoutingDecision`**: tất cả provider `routing_pct>0` vi phạm → `maintenance` (ưu tiên đề xuất/bảo trì, **hủy** plan routing pending khi refresh); một phần vi phạm → `routing` (hard cut §8.6.3).
@@ -805,6 +805,7 @@ Hai nguồn trạng thái — **không trộn lẫn**:
 9. **Từ chối / Duyệt routing:** mỗi SKU chỉ có **một đề xuất chờ** (`pending_approve` / `draft` hoặc synthetic live). Sau **Duyệt** hoặc **Từ chối** → `CancelPendingRoutingPlansForScope` (plan DB) + có thể tạo đề xuất mới nếu metric vẫn vi phạm (`HasPendingRoutingPlan` / không còn plan chờ).
 10. **Từ chối / Duyệt bảo trì:** sau **Từ chối** (synthetic hoặc recommendation Agent) → **không** ẩn theo thời gian; poll tiếp theo sinh lại `pending_maintenance` synthetic nếu metric vẫn vi phạm và `suggested_action=maintenance`. Ghi `DISMISSED:…` trong `recommendations` chỉ để audit.
 11. **Không** tạo incident trên GET — incident do Agent §8.3 khi `ShouldAct` hoặc một trong ba hàm force §9.5.2.
+12. **`has_pending_suggestions`** — field boolean bổ sung trong response `GET /dashboard/overview`: `true` khi bất kỳ row nào có `pending_plan` hoặc `pending_maintenance` (sau tất cả cancel/suppress ở trên). ChatWidget dùng field này làm nguồn authoritative để đồng bộ với dashboard bar — khi `false`, tự động xóa message đề xuất ra khỏi chat (§9.2.2).
 
 **Response `GET /incidents` (phân trang):**
 
@@ -2367,6 +2368,7 @@ IF scope.auto_action IN ("auto", "time_window" trong giờ)
 | 2 | `active_count > 1` AND `healthy_backup_count >= 1` | `routing` | Có provider active khác đủ tốt để nhận traffic |
 | 3 | `active_count > 1` AND `healthy_backup_count == 0` | `maintenance` | Tất cả provider **đang routing** (`routing_pct>0`) đều vi phạm — đề xuất bảo trì SKU (§9.0 `SKURoutingDecision`) |
 | 4 | `auto_action = recommend_only` trên scope | (giữ action trên) | Chỉ đề xuất; admin approve thủ công |
+| 5 | SKU có **active maintenance window** (`CountActiveMaintenanceForSKU > 0`) | **skip** | Không tạo routing plan; hủy plan pending cũ nếu còn |
 
 
 **Ví dụ edge case — 2 provider catalog, 1 inactive, provider active còn lại xấu:**
@@ -2725,7 +2727,10 @@ Mỗi lượt chat có intent đã biết (`maintenance`, `metrics`, …) → `B
 - **Tra cứu:** `IsMaintenanceStatusQuery` — *"có đang bảo trì không"*, *"co dang"*, *"?"* → `tryChatMaintenanceReply`
 - **Lệnh bật BT:** `IsSetMaintenanceCommand` — *"giúp tôi"*, *"toàn bộ"*, *"bật bảo trì"* → `tryChatCommandReply` → **không** fall-through tra cứu
 
-**Pending focus (in-memory, theo `session_id`):** sau `list_pending_actions` hoặc liệt kê pending — lưu mục đầu (`routing_plan` \| `maintenance_suggestion`); lệnh ngắn `ok`/`không` áp dụng focus đó. *Planned §7.6.5.5:* persist vào DB.
+**Pending focus & approve/reject all (in-memory, theo `session_id`):**
+- Lệnh ngắn **có kèm product** (`"duyệt garena 10000"`) → áp dụng đúng scope đó.
+- Lệnh ngắn **không kèm product** (`"duyệt"`, `"ok"`, `"từ chối"`) → áp dụng cho **tất cả** routing plans + maintenance suggestions đang pending (`chatApproveAllPending` / `chatRejectAllPending`); reply trả về tổng kết số lượng.
+- Sau `list_pending_actions` có set session focus → lệnh ngắn tiếp theo dùng focus đó (scope cụ thể). *Planned §7.6.5.5:* persist vào DB.
 
 **Template phản hồi sau hành động** (`formatChatActionReply`) — tối đa ~3 dòng:
 
@@ -4004,85 +4009,80 @@ Khi nhóm SKU cùng `product_code` (`routing_mode=sku`, ≥2 dòng SKU) — ô *
 
 **O365 thật (production):** xem §2.6 — cần `VITE_AAD_*` + backend OIDC verifier.
 
-#### 9.2.2 Tự động mở chat khi có đề xuất mới (Auto-chat-open)
+#### 9.2.2 Tự động mở chat khi có đề xuất mới — và tự động đóng khi tình hình ổn (Auto-chat-open / Auto-clear)
 
-**Tính năng:** Khi hệ thống phát hiện đề xuất routing plan hoặc bảo trì mới, backend phát sự kiện SSE `pending_suggestions` → **chat tự động mở** và hiển thị danh sách đề xuất với **lời nhắc hành động**.
+**Tính năng:** Khi hệ thống phát hiện đề xuất routing plan hoặc bảo trì mới, chat tự động mở và hiển thị danh sách đề xuất. **Khi tình hình hồi phục** (metric ổn, plan bị cancel/duyệt/từ chối), message đề xuất tự động biến mất — đồng bộ hoàn toàn với dashboard bar.
 
-> [!NOTE]
-> Để tránh gây phiền hà khi vừa tải trang, OpsOne được cấu hình **chặn tự động mở trong 3 giây đầu tiên**. Mọi đề xuất nhận được trong thời gian này sẽ chỉ hiển thị khi user chủ động mở chat hoặc sau khi hết thời gian chờ, đảm bảo dashboard được hiển thị ổn định trước.
+**Nguyên tắc cốt lõi:** `GET /dashboard/overview` là **nguồn authoritative** — field `has_pending_suggestions` trong response quyết định chat có message đề xuất hay không. `/suggestions` chỉ là kênh phụ để báo đề xuất MỚI ngay lập tức; khi dashboard đã xác nhận `false`, `/suggestions` không được thêm message lại.
 
-**Backend (internal/api/sse.go):**
-- Mỗi giây, SSE listener kiểm tra `getPendingSuggestionsForSSE()` — tổng hợp routing plan + bảo trì pending từ DB
-- Nếu `has_suggestions=true` → gửi event `pending_suggestions` kèm dữ liệu:
-  ```json
-  {
-    "has_suggestions": true,
-    "plan_count": 2,
-    "maintenance_count": 1,
-    "routing_plans": [
-      {
-        "product_code": "ZING",
-        "sku_code": "20k",
-        "status": "pending",
-        "plan_id": "P001",
-        "proposed_pct": { "ESALE": 60, "IMEDIA": 40 },
-        "reason_vi": "Success rate thấp"
-      }
-    ],
-    "maintenance_suggestions": [
-      {
-        "product_code": "GARENA",
-        "sku_code": "50k",
-        "provider_code": "ESALE",
-        "detail": "Error rate cao",
-        "id": "M001"
-      }
-    ]
-  }
-  ```
+**Backend — `getPendingSuggestionsForSSE()` (`internal/api/chat_actions.go`):**
 
-**Frontend (web/src/components/ChatWidget.tsx):**
-- Listener `useEffect` lắng nghe event `pending_suggestions` từ SSE
-- Gọi `formatSuggestionSystemMessage()` để định dạng thông báo tiếng Việt với emoji:
-  ```
-  📢 **Có việc mới cần xử lý!**
+Trước khi trả dữ liệu, gọi `pruneStalePendingPlans()` để cancel plan không còn hợp lệ:
+- Scope đang có cửa sổ bảo trì active → cancel routing plan
+- Vừa có plan `executed` trong 30 phút (`COALESCE(approved_at, created_at) >= cutoff`) → cancel
+- Metric đã hồi phục (`!snap.AnyBreached`) → cancel
 
-  🔄 **Đề xuất Routing:** (Thay đổi phân phối traffic)
-  • ZING/20k → ESALE: 60% / IMEDIA: 40% (Success rate thấp)
-  • (và nhiều hơn nữa...)
+Sau prune, trả `has_suggestions = len(plans) > 0 || len(maint) > 0`. Mỗi routing plan kèm `auto_action` để frontend phân loại "cần duyệt" vs "hệ thống tự xử lý".
 
-  🔧 **Đề xuất Bảo trì:**
-  • GARENA/50k — Error rate cao (và nhiều hơn...)
+**Backend — `GET /dashboard/overview` (`internal/api/dashboard.go`):**
 
-  💡 **Hành động:**
-  • Gõ "xem pending" để xem chi tiết
-  • Admin: duyệt/từ chối ngay hoặc vào Dashboard
-  ```
-- Thêm system message vào chat
-- Gọi `setOpen(true)` → mở widget nếu chưa mở
-- Gọi `scrollFeedToBottom()` → cuộn đến message mới
-- Kiểm tra duplicate (message cuối có chứa emoji `📢`?) → tránh mở lại nhiều lần
+Ngoài prune trên poll (§2.3.2 mục 3), bổ sung logic cancel khi suppress:
+- `routingProposalSuppressedAfterReject` → plan bị reject trước đó, đề xuất giống hệt → **cancel plan trong DB** (không chỉ ẩn khỏi response) để tránh `/suggestions` tiếp tục báo.
 
-**Quy trình User:**
+Field `has_pending_suggestions` (boolean) trong response: `true` khi bất kỳ row nào có `pending_plan` hoặc `pending_maintenance` sau tất cả cancel/suppress — **cùng nguồn với dashboard bar**.
+
+**Frontend — `ChatWidget.tsx`:**
+
+Hai kênh nhận suggestion, dashboard là authoritative:
+
 ```
-Dashboard đang xem
+SSE event "pending_suggestions"  →  thêm message vào chat (ngay lập tức khi plan mới)
+Poll GET /suggestions mỗi 20s    →  thêm / xóa message (backup khi SSE mất)
+useQuery dashboard-overview      →  XÓA message khi has_pending_suggestions === false
+                                    (authoritative — chạy mỗi 60s, ghi đè /suggestions)
+```
+
+Chi tiết:
+- `dashboardHasPendingRef` — ref đồng bộ với `dashboardOverview.has_pending_suggestions`. `handleSuggestionData()` kiểm tra ref này trước khi thêm message: nếu `dashboardHasPendingRef.current === false` → xóa thay vì thêm.
+- `useEffect([dashboardOverview])` — depend vào **toàn bộ object** (mỗi lần refetch là object mới), không chỉ field. Chạy mỗi 60s; khi `has_pending_suggestions === false` → filter xóa message `📢` / `🤖` khỏi `messages`.
+- `localStorage` filter khi load — strip message có `📢` hoặc `🤖 **Hệ thống đã tự động` → tránh stale proposal hiện lại sau logout/login.
+- Không duplicate: `handleSuggestionData` chỉ thêm message khi message cuối chưa phải là suggestion message.
+
+Format message tiếng Việt:
+```
+📢 **Có đề xuất routing cần duyệt**
+🔄 **Đề xuất Routing:**
+   • ZING/20k → ESALE: 60% / IMEDIA: 40% (Success rate thấp)
+💡 **Hành động:**
+   • Gõ "xem pending" để xem chi tiết
+   • Admin: duyệt/từ chối ngay hoặc vào Dashboard
+
+🤖 **Hệ thống đã tự động điều phối routing**  ← khi auto_action=auto/time_window
+```
+
+**Quy trình đầy đủ (proposal → clear):**
+```
+Metric xấu → agent/dashboard tạo plan pending_approve
     ↓
-Backend phát hiện routing plan mới
+SSE gửi pending_suggestions → chat mở + hiển thị 📢
     ↓
-SSE gửi pending_suggestions event
+[User duyệt / từ chối / metric hồi phục]
     ↓
-Chat tự mở + hiển thị "📢 Có việc mới cần xử lý!"
+dashboard poll (≤60s): has_pending_suggestions = false
     ↓
-User xem danh sách đề xuất rõ ràng
+dashboardHasPendingRef.current = false
     ↓
-Gõ "xem pending" hoặc "duyệt" + product/SKU
+useEffect clears 📢 message + /suggestions poll bị chặn thêm lại
+    ↓
+Chat sạch, đồng bộ với dashboard bar
 ```
 
 **Code:**
-- Backend: `internal/api/chat_actions.go` → `getPendingSuggestionsForSSE()`, `formatSuggestionSystemMessage()`
-- Backend: `internal/api/sse.go` → thêm event `pending_suggestions` trong ticker loop
-- Frontend: `web/src/components/ChatWidget.tsx` → thêm `useEffect` lắng nghe SSE event
-- Frontend: `web/src/api/client.ts` → `eventsUrl()` trả về `/events` endpoint
+- `internal/api/chat_actions.go` → `pruneStalePendingPlans()`, `getPendingSuggestionsForSSE()`
+- `internal/api/sse.go` → gửi `pending_suggestions` event (cả khi `has_suggestions=false` để frontend clear)
+- `internal/api/dashboard.go` → `has_pending_suggestions` field; cancel khi `routingProposalSuppressedAfterReject`
+- `web/src/components/ChatWidget.tsx` → `dashboardHasPendingRef`, `useEffect([dashboardOverview])`, `handleSuggestionData` với dashboard-gate
+- `web/src/types/api.ts` → `has_pending_suggestions?: boolean` trong `DashboardOverview`
 
 #### 9.2.3 Tự động cập nhật dữ liệu sau hành động bảo trì (Auto-refetch)
 

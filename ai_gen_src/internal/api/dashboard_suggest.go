@@ -196,6 +196,12 @@ func (s *Server) routingPlanResponse(ctx context.Context, product, sku string, p
 	if s.routingProposalSuppressedAfterReject(ctx, product, sku, plan) {
 		return nil
 	}
+	// Không tạo đề xuất mới nếu vừa được approve hoặc routing đã khớp rồi.
+	// Cancel luôn plan pending cũ trong DB để hasPendingPlan=false ở dashboard switch.
+	if s.routingProposalSuppressedAfterExecute(ctx, product, sku, plan) {
+		_ = s.DB.CancelPendingRoutingPlansForScope(ctx, product, sku)
+		return nil
+	}
 	hasPlan, err := s.DB.HasPendingRoutingPlan(ctx, product, sku)
 	if err != nil {
 		return syntheticPendingPlanMap(product, sku, plan)
@@ -220,6 +226,32 @@ func (s *Server) routingPlanResponse(ctx context.Context, product, sku string, p
 		}
 	}
 	return syntheticPendingPlanMap(product, sku, plan)
+}
+
+// routingProposalSuppressedAfterExecute returns true when a routing plan for this
+// scope was recently executed (approved), preventing the dashboard from immediately
+// re-proposing the same change every 60-second poll cycle.
+func (s *Server) routingProposalSuppressedAfterExecute(ctx context.Context, product, sku string, plan agent.RoutingPlanJSON) bool {
+	// Cooldown: 30 minutes after last execution.
+	recentlyExecuted, err := s.DB.RecentlyExecutedRoutingPlan(ctx, product, sku, 30*time.Minute)
+	if err == nil && recentlyExecuted {
+		return true
+	}
+	// Also suppress when current routing already matches the proposal (±2% tolerance).
+	rows, err := s.DB.GetRoutingForScope(ctx, product, sku)
+	if err != nil || len(rows) == 0 {
+		return false
+	}
+	current := make(map[string]float64, len(rows))
+	for _, r := range rows {
+		current[r.ProviderCode] = r.TrafficPct
+	}
+	for provider, proposedPct := range plan.Proposed {
+		if math.Abs(current[provider]-proposedPct) > 2.0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) resolveScopeActionFromSnapshot(

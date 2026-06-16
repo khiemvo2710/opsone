@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"opsone/internal/domain"
 )
@@ -125,6 +126,24 @@ func (db *DB) GetLatestRoutingPlanForScope(ctx context.Context, productCode, sku
 		return RoutingPlanRow{}, false, err
 	}
 	return row, true, nil
+}
+
+// RecentlyExecutedRoutingPlan returns true when a routing plan for the scope was
+// executed (approved) within the last `within` duration. Used to prevent the agent
+// from immediately re-proposing the same change after the user just approved one.
+func (db *DB) RecentlyExecutedRoutingPlan(ctx context.Context, productCode, skuCode string, within time.Duration) (bool, error) {
+	cutoff := time.Now().Add(-within)
+	var n int
+	err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM routing_plans
+		WHERE product_code = ? AND sku_code = ? AND status = 'executed'
+		  AND COALESCE(approved_at, created_at) >= ?`,
+		productCode, skuCode, cutoff,
+	).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // HasPendingRoutingPlan reports whether a scope already has a plan awaiting approval.

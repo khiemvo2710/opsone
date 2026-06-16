@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"opsone/internal/agent"
 	"opsone/internal/notify"
@@ -12,10 +13,77 @@ import (
 	"opsone/internal/tools"
 )
 
+// pruneStalePendingPlans cancels routing plans that are no longer warranted:
+//   - scope has an active maintenance window, OR
+//   - scope metrics have recovered (no provider currently breached).
+//
+// Called before building SSE suggestions so that login / reconnect never shows stale proposals.
+func (s *Server) pruneStalePendingPlans(ctx context.Context) {
+	plans, err := s.DB.ListPendingRoutingPlansPerScope(ctx)
+	if err != nil || len(plans) == 0 {
+		return
+	}
+
+	// Active maintenance windows
+	now := time.Now()
+	maintRows, _ := s.DB.ListMaintenanceWindows(ctx, "", "active", 100)
+	maintByScope := map[scopeKey]bool{}
+	for _, m := range maintRows {
+		if !m.EndsAt.Before(now) && !m.StartsAt.After(now) {
+			maintByScope[scopeKey{product: m.ProductCode, sku: m.SKUCode}] = true
+		}
+	}
+
+	// Build metric caches once (reuses same logic as handleDashboardOverview)
+	caches, err := s.newOverviewCaches(ctx)
+	if err != nil {
+		// At minimum, cancel plans for scopes in active maintenance
+		for _, p := range plans {
+			k := scopeKey{product: p.ProductCode, sku: p.SKUCode}
+			if maintByScope[k] {
+				_ = s.DB.CancelPendingRoutingPlansForScope(ctx, p.ProductCode, p.SKUCode)
+			}
+		}
+		return
+	}
+
+	for _, p := range plans {
+		k := scopeKey{product: p.ProductCode, sku: p.SKUCode}
+
+		// Cancel when scope is in active maintenance
+		if maintByScope[k] {
+			_ = s.DB.CancelPendingRoutingPlansForScope(ctx, p.ProductCode, p.SKUCode)
+			continue
+		}
+
+		// Cancel khi vừa có plan được approve (cooldown 30 phút tính từ approved_at)
+		if recentlyExecuted, err := s.DB.RecentlyExecutedRoutingPlan(ctx, p.ProductCode, p.SKUCode, 30*time.Minute); err == nil && recentlyExecuted {
+			_ = s.DB.CancelPendingRoutingPlansForScope(ctx, p.ProductCode, p.SKUCode)
+			continue
+		}
+
+		// Cancel when metrics have recovered — load routing to build snapshot
+		routingRows, err := s.DB.GetRoutingForScope(ctx, p.ProductCode, p.SKUCode)
+		if err != nil || len(routingRows) == 0 {
+			continue
+		}
+		providers := make(map[string]float64, len(routingRows))
+		for _, r := range routingRows {
+			providers[r.ProviderCode] = roundPct(r.TrafficPct)
+		}
+		snap := s.buildScopeSnapshot(ctx, caches, p.ProductCode, p.SKUCode, providers, nil)
+		if !snap.AnyBreached {
+			_ = s.DB.CancelPendingRoutingPlansForScope(ctx, p.ProductCode, p.SKUCode)
+		}
+	}
+}
+
 // getPendingSuggestionsForSSE returns pending routing plans and maintenance suggestions.
 // Each routing plan includes auto_action from routing_scope_state so the frontend
 // can differentiate "needs approval" (recommend_only) from "auto-handled" (auto/time_window).
 func (s *Server) getPendingSuggestionsForSSE(ctx context.Context) (map[string]any, error) {
+	// Remove plans that are no longer valid before building the response.
+	s.pruneStalePendingPlans(ctx)
 	plans, err := s.DB.ListPendingRoutingPlansPerScope(ctx)
 	if err != nil {
 		return nil, err

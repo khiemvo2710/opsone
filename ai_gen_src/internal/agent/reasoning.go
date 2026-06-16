@@ -289,6 +289,21 @@ func (r *Reasoner) emitOutputs(ctx context.Context, cycleID uint64, day time.Tim
 				}
 				break
 			}
+			// Không tạo đề xuất nếu routing hiện tại đã khớp với proposed
+			// (user đã approve → routing đã thay đổi → không cần propose lại).
+			curRouting := currentRouting(*pc, *worst)
+			if routingMatchesProposed(curRouting, plan.Proposed) {
+				pc.HealthStatus = "yellow"
+				pc.HealthSummary = fmt.Sprintf("%s — Routing đã áp dụng, đang theo dõi", productDisplayName(*pc))
+				break
+			}
+			// Cooldown: không tạo plan mới nếu vừa có plan được execute trong 30 phút qua.
+			recentlyExecuted, _ := r.DB.RecentlyExecutedRoutingPlan(ctx, pc.Product.ProductCode, worst.SKUCode, 30*time.Minute)
+			if recentlyExecuted {
+				pc.HealthStatus = "yellow"
+				pc.HealthSummary = fmt.Sprintf("%s — Routing vừa thay đổi, đang theo dõi (cooldown)", productDisplayName(*pc))
+				break
+			}
 			_, err = r.DB.InsertRoutingPlan(ctx, cyclePtr, pc.Product.ProductCode, scope, worst.SKUCode, plan, "pending_approve")
 			if err != nil {
 				return err
@@ -500,6 +515,8 @@ func (r *Reasoner) autoResolveHealthyScopes(ctx context.Context, cycleID uint64,
 				})
 				_ = r.DB.DeleteRecommendationsForScope(ctx, s.ProductCode, s.SKUCode)
 			}
+			// Hủy routing plan pending nếu scope đã hồi phục — tránh hiện đề xuất lỗi thời
+			_ = r.DB.CancelPendingRoutingPlansForScope(ctx, s.ProductCode, s.SKUCode)
 		}
 		return nil
 	}
@@ -519,6 +536,8 @@ func (r *Reasoner) autoResolveHealthyScopes(ctx context.Context, cycleID uint64,
 			})
 			_ = r.DB.DeleteRecommendationsForScope(ctx, s.ProductCode, s.SKUCode)
 		}
+		// Hủy routing plan pending nếu scope đã hồi phục — tránh hiện đề xuất lỗi thời
+		_ = r.DB.CancelPendingRoutingPlansForScope(ctx, s.ProductCode, s.SKUCode)
 	}
 	return nil
 }

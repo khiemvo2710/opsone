@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiClientError, eventsUrl } from '../api/client';
+import type { DashboardOverview } from '../types/api';
 import { useVoiceInput, primeSpeechRecognition, VOICE_WAKE_WORD } from '../hooks/useVoiceInput';
 import { useOpsOneWake } from '../hooks/useOpsOneWake';
 import { useChatDock } from '../hooks/useChatDock';
@@ -154,14 +155,24 @@ export function ChatWidget() {
   const micAllowed = session?.micAllowed ?? true;
   const [open, setOpen] = useState(false);
 
-  // Load persisted history for current user
+  // Load persisted history for current user.
+  // Suggestion messages (📢 / 🤖 auto-routing) are stripped on load — they are
+  // re-injected on mount via the /suggestions check if still relevant.
+  // This prevents stale proposals from reappearing after logout / login.
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     if (!session?.name) return [];
     try {
       const raw = localStorage.getItem(chatHistoryStorageKey(session.name));
       if (!raw) return [];
       const parsed = JSON.parse(raw) as ChatMessage[];
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        (m) =>
+          !(
+            m.role === 'assistant' &&
+            (m.text.includes('📢') || m.text.includes('🤖 **Hệ thống đã tự động'))
+          )
+      );
     } catch {
       return [];
     }
@@ -192,6 +203,35 @@ export function ChatWidget() {
   const { size, isResizing, activeCorner, onResizeStart, onResizeMove, onResizeEnd } =
     useChatResize(widgetRef);
   const queryClient = useQueryClient();
+
+  // Watch dashboard overview — khi has_pending_suggestions=false, xóa chat message đề xuất ngay.
+  // Dashboard là nguồn authoritative — cùng logic với dashboard bar.
+  const dashboardHasPendingRef = useRef<boolean | undefined>(undefined);
+  const { data: dashboardOverview } = useQuery<DashboardOverview>({
+    queryKey: ['dashboard-overview'],
+    queryFn: () => api<DashboardOverview>('/dashboard/overview'),
+    staleTime: 55_000,
+    refetchInterval: 60_000,
+  });
+  useEffect(() => {
+    const hasPending = dashboardOverview?.has_pending_suggestions;
+    dashboardHasPendingRef.current = hasPending;
+    // Strict false check — undefined means "not loaded yet", true means "pending".
+    // Run on every dashboardOverview update (not just when field changes) so that
+    // each 60s refetch re-clears if dashboard still says no pending suggestions.
+    if (hasPending === false) {
+      setMessages((prev) =>
+        prev.filter(
+          (m) =>
+            !(
+              m.role === 'assistant' &&
+              (m.text.includes('📢') || m.text.includes('🤖 **Hệ thống đã tự động'))
+            )
+        )
+      );
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dashboardOverview]); // depend on whole object — runs every refetch
 
   const scrollFeedToBottom = useCallback(() => {
     const feed = feedRef.current;
@@ -390,42 +430,51 @@ export function ChatWidget() {
     onWake: handleAloWake,
   });
 
-  // Auto-open chat with suggestions: on mount (immediate check) + on every new SSE cycle.
-  // Falls back to REST polling when SSE is buffered by a reverse proxy (GreenNode).
+  // Suggestions sync: check /suggestions on mount, on every SSE cycle, and every 20s
+  // so the chat clears stale proposals quickly when the situation recovers —
+  // without waiting for the next 5-min agent cycle.
   useEffect(() => {
     let es: EventSource | null = null;
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
     let mounted = true;
 
+    const isSuggestionMessage = (m: ChatMessage) =>
+      m.role === 'assistant' &&
+      (m.text.includes('📢') || m.text.includes('🤖 **Hệ thống đã tự động'));
+
     const handleSuggestionData = (data: { has_suggestions?: boolean; [k: string]: unknown }) => {
-      if (!mounted || !data.has_suggestions) return;
+      if (!mounted) return;
+      // Dashboard is authoritative: if it already confirmed no pending suggestions,
+      // don't let a stale /suggestions poll re-inject the message.
+      if (!data.has_suggestions || dashboardHasPendingRef.current === false) {
+        // Tình hình đã ổn → xóa message đề xuất cũ khỏi chat ngay lập tức.
+        setMessages((prev) => prev.filter((m) => !isSuggestionMessage(m)));
+        return;
+      }
       setOpen(true);
       const message = formatSuggestionSystemMessage(data);
       if (message) {
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1];
-          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.text.includes('📢')) return prev;
+          if (lastMsg && isSuggestionMessage(lastMsg)) return prev;
           return [...prev, appendMessage('assistant', message)];
         });
         requestAnimationFrame(() => scrollFeedToBottom());
       }
     };
 
-    // Immediate check on mount — open chat right away if suggestions already exist.
-    api<{ has_suggestions?: boolean }>('/suggestions')
-      .then(handleSuggestionData)
-      .catch(() => { /* ignore — SSE/poll will handle it */ });
-
-    // Fallback: poll REST endpoint every 30 s when SSE is unavailable.
-    const startFallbackPoll = () => {
-      if (pollTimer) return;
-      pollTimer = setInterval(async () => {
-        try {
-          const data = await api<{ has_suggestions?: boolean }>('/suggestions');
-          handleSuggestionData(data);
-        } catch { /* network error — try next tick */ }
-      }, 30_000);
+    const pollSuggestions = async () => {
+      try {
+        const data = await api<{ has_suggestions?: boolean }>('/suggestions');
+        handleSuggestionData(data);
+      } catch { /* network error — ignore */ }
     };
+
+    // Immediate check on mount.
+    pollSuggestions();
+
+    // Always poll every 20 s — catches plan cancellations that happen between agent cycles.
+    // SSE supplements this by reacting to new plans immediately when a cycle fires.
+    const pollTimer = setInterval(pollSuggestions, 20_000);
 
     try {
       es = new EventSource(eventsUrl());
@@ -433,19 +482,13 @@ export function ChatWidget() {
         try { handleSuggestionData(JSON.parse(event.data) as { has_suggestions?: boolean }); }
         catch { /* ignore parse errors */ }
       });
-      es.onerror = () => {
-        es?.close();
-        es = null;
-        startFallbackPoll(); // SSE failed → switch to polling
-      };
-    } catch {
-      startFallbackPoll();
-    }
+      es.onerror = () => { es?.close(); es = null; };
+    } catch { /* SSE unavailable — polling covers it */ }
 
     return () => {
       mounted = false;
       es?.close();
-      if (pollTimer) clearInterval(pollTimer);
+      clearInterval(pollTimer);
     };
   }, [scrollFeedToBottom]);
 

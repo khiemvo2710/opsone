@@ -91,6 +91,8 @@ export interface DashboardOverview {
   /** Ngưỡng per product — gom trong overview để tránh N request riêng. */
   thresholds?: Record<string, ProductThreshold>;
   rows: DashboardOverviewRow[];
+  /** True khi có ít nhất 1 row có pending_plan hoặc pending_maintenance — same source as the dashboard bar. */
+  has_pending_suggestions?: boolean;
 }
 
 export interface AgentConfig {

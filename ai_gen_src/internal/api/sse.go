@@ -66,15 +66,14 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 					"health_label":  cycle.HealthStatus,
 				})
 
-				// Send pending suggestions when cycle finishes
+				// Send pending suggestions when cycle finishes.
+				// Always send (even when empty) so the frontend can clear stale proposal messages.
 				now := time.Now().Unix()
 				if now != lastSuggestionCheck { // Only check once per second
 					lastSuggestionCheck = now
 					suggestions, err := s.getPendingSuggestionsForSSE(r.Context())
 					if err == nil && suggestions != nil {
-						if hasSuggestions := getBool(suggestions, "has_suggestions"); hasSuggestions {
-							send("pending_suggestions", suggestions)
-						}
+						send("pending_suggestions", suggestions)
 					}
 				}
 			}

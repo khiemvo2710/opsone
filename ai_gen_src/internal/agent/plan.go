@@ -60,6 +60,21 @@ func currentRouting(pc ProductContext, s ScopeContext) map[string]float64 {
 	return out
 }
 
+// routingMatchesProposed returns true when the current routing already matches
+// the proposed routing within 2% tolerance per provider.
+// Used to skip re-creating a plan that was already executed by the user.
+func routingMatchesProposed(current, proposed map[string]float64) bool {
+	if len(proposed) == 0 {
+		return false
+	}
+	for provider, proposedPct := range proposed {
+		if math.Abs(current[provider]-proposedPct) > 2.0 {
+			return false
+		}
+	}
+	return true
+}
+
 func successByProvider(pc ProductContext, focus ScopeContext) map[string]float64 {
 	out := make(map[string]float64)
 	sku := focus.SKUCode

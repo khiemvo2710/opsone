@@ -160,10 +160,16 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		inActiveMaint := item["maintenance"] != nil
+		// SKU đang bảo trì → cancel routing plan ngay (không cần chờ agent cycle)
+		if inActiveMaint && hasPendingPlan {
+			_ = s.DB.CancelPendingRoutingPlansForScope(ctx, k.product, k.sku)
+			hasPendingPlan = false
+		}
 		if !inActiveMaint && hasTh && hasPendingPlan && livePlan == nil && snap.AnyBreached && !maintWarranted {
 			livePlan = s.refreshPendingRoutingFromSnapshot(ctx, caches, k.product, k.sku, snap, maintainedProviders)
 		}
-		if !inActiveMaint && hasPendingPlan && !snap.AnyBreached && !snap.ShouldAct {
+		// Metrics đã hồi phục → cancel ngay, không chờ ShouldAct clear
+		if !inActiveMaint && hasPendingPlan && !snap.AnyBreached {
 			_ = s.DB.CancelPendingRoutingPlansForScope(ctx, k.product, k.sku)
 			hasPendingPlan = false
 		}
@@ -257,9 +263,14 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 				if hasPendingPlan && !maintWarranted {
 					if plan, ok := planByScope[k]; ok {
 						var planJSON agent.RoutingPlanJSON
-						if err := json.Unmarshal(plan.PlanJSON, &planJSON); err != nil ||
-							!s.routingProposalSuppressedAfterReject(ctx, k.product, k.sku, planJSON) {
-							item["pending_plan"] = routingPlanJSON(plan)
+						if err := json.Unmarshal(plan.PlanJSON, &planJSON); err == nil {
+							if s.routingProposalSuppressedAfterReject(ctx, k.product, k.sku, planJSON) {
+								// Cancel plan that was rejected — must not persist in DB or
+								// /suggestions will keep reporting it even though bar is hidden.
+								_ = s.DB.CancelPendingRoutingPlansForScope(ctx, k.product, k.sku)
+							} else {
+								item["pending_plan"] = routingPlanJSON(plan)
+							}
 						}
 					}
 				}
@@ -269,11 +280,22 @@ func (s *Server) handleDashboardOverview(w http.ResponseWriter, r *http.Request)
 		outRows = append(outRows, item)
 	}
 
+	// Derive has_pending_suggestions from the final rows so chat widget can sync
+	// exactly with the dashboard bar — no separate /suggestions call needed.
+	hasPendingSuggestions := false
+	for _, row := range outRows {
+		if row["pending_plan"] != nil || row["pending_maintenance"] != nil {
+			hasPendingSuggestions = true
+			break
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"updated_at":  time.Now(),
-		"providers":   []string{"ESALE", "IMEDIA", "SHOPPAY"},
-		"thresholds":  thresholdsJSON(caches.thresholds),
-		"rows":        outRows,
+		"updated_at":              time.Now(),
+		"providers":               []string{"ESALE", "IMEDIA", "SHOPPAY"},
+		"thresholds":              thresholdsJSON(caches.thresholds),
+		"rows":                    outRows,
+		"has_pending_suggestions": hasPendingSuggestions,
 	})
 }
 
